@@ -3,10 +3,12 @@ package app
 import (
 	"bufio"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"strings"
 )
 
 var (
@@ -22,8 +24,29 @@ type CLIApplication struct {
 	URLS []string
 }
 
+func flagUsage(code int, out io.Writer) func() {
+	return func() {
+		fmt.Fprintf(
+			out,
+			cmdUsage,
+			os.Args[0],
+			Version,
+		)
+		if code > 0 {
+			os.Exit(code)
+		}
+	}
+}
+
 // NewCLIApplication creates new app instance.
 func NewCLIApplication() *CLIApplication {
+	flag.Usage = flagUsage(0, os.Stdin)
+
+	optVersionInformation = flag.Bool("version", false, "display version information ("+Version+")")
+	optVerboseOutput = flag.Bool("verbose", false, "verbose output")
+
+	flag.Parse()
+
 	return &CLIApplication{
 		In:  os.Stdin,
 		Out: os.Stdout,
@@ -61,8 +84,8 @@ func (c *CLIApplication) parsePipe(r io.Reader) error {
 }
 
 func (c *CLIApplication) parseArgs() {
-	if len(os.Args) > 1 {
-		for _, arg := range os.Args[1:] {
+	if len(flag.Args()) > 0 {
+		for _, arg := range flag.Args() {
 			url, err := c.parseValidateURL(arg)
 			if err == nil {
 				c.URLS = append(c.URLS, url)
@@ -73,6 +96,11 @@ func (c *CLIApplication) parseArgs() {
 
 // Run executes CLIApplication.
 func (c *CLIApplication) Run() error {
+	if *optVersionInformation {
+		fmt.Fprintln(c.Out, Version)
+		return nil
+	}
+
 	if c.isPiped() {
 		if err := c.parsePipe(c.In); err != nil {
 			return err
@@ -82,6 +110,9 @@ func (c *CLIApplication) Run() error {
 
 	if len(c.URLS) == 0 {
 		return errEmptyURL
+	}
+	if *optVerboseOutput {
+		fmt.Fprintf(c.Out, "will download %d file(s)\n%s\n", len(c.URLS), strings.Join(c.URLS, "\n"))
 	}
 	return nil
 }
