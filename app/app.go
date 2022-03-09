@@ -42,8 +42,8 @@ func flagUsage(code int, out io.Writer) func() {
 func NewCLIApplication() *CLIApplication {
 	flag.Usage = flagUsage(0, os.Stdin)
 
-	optVersionInformation = flag.Bool("version", false, "display version information ("+Version+")")
-	optVerboseOutput = flag.Bool("verbose", false, "verbose output")
+	optFlagVersion = flag.Bool("version", false, "display version information ("+Version+")")
+	optFlagVerbose = flag.Bool("verbose", false, "verbose output")
 
 	flag.Parse()
 
@@ -96,7 +96,7 @@ func (c *CLIApplication) parseArgs() {
 
 // Run executes CLIApplication.
 func (c *CLIApplication) Run() error {
-	if *optVersionInformation {
+	if *optFlagVersion {
 		fmt.Fprintln(c.Out, Version)
 		return nil
 	}
@@ -111,7 +111,7 @@ func (c *CLIApplication) Run() error {
 	if len(c.URLS) == 0 {
 		return errEmptyURL
 	}
-	if *optVerboseOutput {
+	if *optFlagVerbose {
 		fmt.Fprintf(c.Out, "will download %d file(s)\n%s\n", len(c.URLS), strings.Join(c.URLS, "\n"))
 	}
 	return nil

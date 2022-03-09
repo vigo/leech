@@ -11,6 +11,6 @@ usage: %[1]s [-flags] URL URL URL ...
 `
 
 var (
-	optVersionInformation *bool
-	optVerboseOutput      *bool
+	optFlagVersion *bool
+	optFlagVerbose *bool
 )
