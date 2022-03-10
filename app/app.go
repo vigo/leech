@@ -7,11 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
+	"strconv"
+	"sync"
 	"time"
 )
 
@@ -128,14 +130,13 @@ func (c *CLIApplication) getChunks(length int, chunkSize int) [][2]int {
 	return out
 }
 
-type contentInformation struct {
-	contentType   string
-	filename      string
-	contentLength int64
-	chunks        [][2]int
+type resource struct {
+	url      string
+	filename string
+	chunks   [][2]int
 }
 
-func (c *CLIApplication) getContentInformation(url string) (*contentInformation, error) {
+func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -156,32 +157,25 @@ func (c *CLIApplication) getContentInformation(url string) (*contentInformation,
 		return nil, fmt.Errorf("%w, returned %d", errHTTPStatusIsNotOK, resp.StatusCode)
 	}
 
-	contentInfo := &contentInformation{}
-
-	contentInfo.contentLength = resp.ContentLength
-	acceptRanges, ok := resp.Header["Accept-Ranges"]
-	if ok {
-		if contentInfo.contentLength > 0 && len(acceptRanges) > 0 && acceptRanges[0] == "bytes" {
-			contentInfo.chunks = c.getChunks(int(contentInfo.contentLength), *optFlagChunkSize)
-		}
+	r := &resource{
+		url: url,
 	}
 
-	contentType, ok := resp.Header["Content-Type"]
+	acceptRanges, ok := resp.Header["Accept-Ranges"]
 	if ok {
-		contentInfo.contentType = contentType[0]
+		if resp.ContentLength > 0 && len(acceptRanges) > 0 && acceptRanges[0] == "bytes" {
+			r.chunks = c.getChunks(int(resp.ContentLength), *optFlagChunkSize)
+		}
 	}
 
 	contentDisposition, ok := resp.Header["Content-Disposition"]
 	if ok {
 		_, params, err := mime.ParseMediaType(contentDisposition[0])
 		if err == nil {
-			contentInfo.filename = params["filename"]
+			r.filename = params["filename"]
 		}
 	}
-	if *optFlagVerbose {
-		fmt.Fprintf(c.Out, "[verbose] contentInfo: %+v\n", contentInfo)
-	}
-	return contentInfo, nil
+	return r, nil
 }
 
 // Run executes CLIApplication.
@@ -201,29 +195,77 @@ func (c *CLIApplication) Run() error {
 	if len(c.URLS) == 0 {
 		return errEmptyURL
 	}
-	if *optFlagVerbose {
-		fmt.Fprintf(c.Out, "[verbose] will download %d file(s)\n%s\n", len(c.URLS), strings.Join(c.URLS, "\n"))
-	}
 
-	infos := make(chan *contentInformation)
-	for i := 0; i < len(c.URLS); i++ {
+	fmt.Println("optFlagVerbose", *optFlagVerbose)
+
+	resource := make(chan *resource)
+
+	for _, u := range c.URLS {
 		go func(url string) {
-			fmt.Println("fired", url)
-			info, err := c.getContentInformation(url)
+			fmt.Println("firing ->", url)
+			r, err := c.getResourceInformation(url)
 			if err != nil {
-				fmt.Println("err", err)
+				fmt.Println("-> err", err)
 			}
-			infos <- info
-			fmt.Println("unblocked", url)
-		}(c.URLS[i])
+			resource <- r
+		}(u)
 	}
 
-	for i := 0; i < len(c.URLS); i++ {
-		info, ok := <-infos
-		if ok {
-			fmt.Println("info", info)
+	var downloadsCount int
+	done := make(chan struct{})
+
+	for range c.URLS {
+		r := <-resource
+		if r != nil {
+			downloadsCount++
+			go c.download(r, done)
 		}
 	}
-	close(infos)
+
+	fmt.Println("downloadsCount", downloadsCount)
+
+	for i := 0; i < downloadsCount; i++ {
+		<-done
+	}
+	return nil
+}
+
+func (c *CLIApplication) download(r *resource, done chan struct{}) {
+	fmt.Printf("%+v\n", r)
+	if r.chunks != nil {
+		var wg sync.WaitGroup
+		for i, chunkPair := range r.chunks {
+			wg.Add(1)
+			go func(part int, chunkPair [2]int) {
+				defer wg.Done()
+				if err := c.fetch(part, r.url, chunkPair); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+				}
+			}(i, chunkPair)
+		}
+		wg.Wait()
+	}
+	done <- struct{}{}
+}
+
+func (c *CLIApplication) fetch(part int, url string, chunk [2]int) error {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to Request (fetch), %w", err)
+	}
+	req.Header.Set("Range", "bytes="+strconv.Itoa(chunk[0])+"-"+strconv.Itoa(chunk[1]))
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to Do (fetch), %w", err)
+	}
+	fmt.Println("Status Code", resp.StatusCode)
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	fmt.Println("save part", part, "for url", url)
+	_, _ = io.Copy(ioutil.Discard, resp.Body)
+
 	return nil
 }
