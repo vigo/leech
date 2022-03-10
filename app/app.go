@@ -238,7 +238,7 @@ func (c *CLIApplication) download(r *resource, done chan struct{}) {
 	if r.chunks != nil {
 		var wg sync.WaitGroup
 
-		fcontent := make([]byte, r.length-1)
+		fcontent := make([]byte, r.length)
 
 		for i, chunkPair := range r.chunks {
 			wg.Add(1)
