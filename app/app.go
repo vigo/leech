@@ -22,6 +22,8 @@ var (
 	errHTTPStatusIsNotOK = errors.New("http status is not ok")
 )
 
+const defaultChunkSize = 5
+
 // CLIApplication represents new app instance.
 type CLIApplication struct {
 	In     io.Reader
@@ -50,6 +52,7 @@ func NewCLIApplication() *CLIApplication {
 
 	optFlagVersion = flag.Bool("version", false, "display version information ("+Version+")")
 	optFlagVerbose = flag.Bool("verbose", false, "verbose output")
+	optFlagChunkSize = flag.Int("chunks", defaultChunkSize, "default chunk size")
 
 	flag.Parse()
 
@@ -107,29 +110,29 @@ func (c *CLIApplication) parseArgs() {
 	}
 }
 
-// func (c *CLIApplication) getChunks(length int, chunkSize int) [][2]int {
-// 	out := [][2]int{}
-//
-// 	chunk := length / chunkSize
-//
-// 	start := 0
-// 	end := 0
-// 	for i := 0; i < chunkSize-1; i++ {
-// 		start = i * (chunk + 1)
-// 		end = start + chunk
-// 		out = append(out, [2]int{start, end})
-// 	}
-// 	start = start + chunk + 1
-// 	end = length - 1
-// 	out = append(out, [2]int{start, end})
-// 	return out
-// }
+func (c *CLIApplication) getChunks(length int, chunkSize int) [][2]int {
+	out := [][2]int{}
+
+	chunk := length / chunkSize
+
+	start := 0
+	end := 0
+	for i := 0; i < chunkSize-1; i++ {
+		start = i * (chunk + 1)
+		end = start + chunk
+		out = append(out, [2]int{start, end})
+	}
+	start = start + chunk + 1
+	end = length - 1
+	out = append(out, [2]int{start, end})
+	return out
+}
 
 type contentInformation struct {
-	acceptRanges  string
 	contentType   string
 	filename      string
 	contentLength int64
+	chunks        [][2]int
 }
 
 func (c *CLIApplication) getContentInformation(url string) (*contentInformation, error) {
@@ -155,17 +158,18 @@ func (c *CLIApplication) getContentInformation(url string) (*contentInformation,
 
 	contentInfo := &contentInformation{}
 
+	contentInfo.contentLength = resp.ContentLength
 	acceptRanges, ok := resp.Header["Accept-Ranges"]
 	if ok {
-		contentInfo.acceptRanges = acceptRanges[0]
+		if contentInfo.contentLength > 0 && len(acceptRanges) > 0 && acceptRanges[0] == "bytes" {
+			contentInfo.chunks = c.getChunks(int(contentInfo.contentLength), *optFlagChunkSize)
+		}
 	}
 
 	contentType, ok := resp.Header["Content-Type"]
 	if ok {
 		contentInfo.contentType = contentType[0]
 	}
-
-	contentInfo.contentLength = resp.ContentLength
 
 	contentDisposition, ok := resp.Header["Content-Disposition"]
 	if ok {
@@ -174,8 +178,9 @@ func (c *CLIApplication) getContentInformation(url string) (*contentInformation,
 			contentInfo.filename = params["filename"]
 		}
 	}
-
-	fmt.Printf("%+v\n", resp)
+	if *optFlagVerbose {
+		fmt.Fprintf(c.Out, "[verbose] contentInfo: %+v\n", contentInfo)
+	}
 	return contentInfo, nil
 }
 
@@ -197,13 +202,28 @@ func (c *CLIApplication) Run() error {
 		return errEmptyURL
 	}
 	if *optFlagVerbose {
-		fmt.Fprintf(c.Out, "will download %d file(s)\n%s\n", len(c.URLS), strings.Join(c.URLS, "\n"))
+		fmt.Fprintf(c.Out, "[verbose] will download %d file(s)\n%s\n", len(c.URLS), strings.Join(c.URLS, "\n"))
 	}
 
-	info, err := c.getContentInformation(c.URLS[0])
-	if err != nil {
-		return err
+	infos := make(chan *contentInformation)
+	for i := 0; i < len(c.URLS); i++ {
+		go func(url string) {
+			fmt.Println("fired", url)
+			info, err := c.getContentInformation(url)
+			if err != nil {
+				fmt.Println("err", err)
+			}
+			infos <- info
+			fmt.Println("unblocked", url)
+		}(c.URLS[i])
 	}
-	fmt.Printf("%+v\n", info)
+
+	for i := 0; i < len(c.URLS); i++ {
+		info, ok := <-infos
+		if ok {
+			fmt.Println("info", info)
+		}
+	}
+	close(infos)
 	return nil
 }
