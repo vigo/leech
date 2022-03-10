@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -133,6 +134,7 @@ func (c *CLIApplication) getChunks(length int, chunkSize int) [][2]int {
 type resource struct {
 	url      string
 	filename string
+	length   int64
 	chunks   [][2]int
 }
 
@@ -158,7 +160,8 @@ func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 	}
 
 	r := &resource{
-		url: url,
+		url:    url,
+		length: resp.ContentLength,
 	}
 
 	acceptRanges, ok := resp.Header["Accept-Ranges"]
@@ -234,30 +237,49 @@ func (c *CLIApplication) download(r *resource, done chan struct{}) {
 	fmt.Printf("%+v\n", r)
 	if r.chunks != nil {
 		var wg sync.WaitGroup
+
+		fcontent := make([]byte, r.length)
+
 		for i, chunkPair := range r.chunks {
 			wg.Add(1)
 			go func(part int, chunkPair [2]int) {
 				defer wg.Done()
-				if err := c.fetch(part, r.url, chunkPair); err != nil {
-					fmt.Fprintln(os.Stderr, err)
+				byteParts, err := c.fetch(part, r.url, chunkPair)
+				if err == nil {
+					copy(fcontent[chunkPair[0]:], byteParts)
 				}
 			}(i, chunkPair)
 		}
 		wg.Wait()
+
+		fmt.Printf("%+v\n", r)
+
+		f, err := os.Create("/tmp/foo.jpg")
+		if err != nil {
+			log.Fatal(err)
+		}
+		_, err = f.Write(fcontent)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer func() {
+			_ = f.Close()
+		}()
+
 	}
 	done <- struct{}{}
 }
 
-func (c *CLIApplication) fetch(part int, url string, chunk [2]int) error {
+func (c *CLIApplication) fetch(part int, url string, chunk [2]int) ([]byte, error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
-		return fmt.Errorf("failed to Request (fetch), %w", err)
+		return nil, fmt.Errorf("failed to Request (fetch), %w", err)
 	}
 	req.Header.Set("Range", "bytes="+strconv.Itoa(chunk[0])+"-"+strconv.Itoa(chunk[1]))
 
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to Do (fetch), %w", err)
+		return nil, fmt.Errorf("failed to Do (fetch), %w", err)
 	}
 	fmt.Println("Status Code", resp.StatusCode)
 	defer func() {
@@ -265,7 +287,12 @@ func (c *CLIApplication) fetch(part int, url string, chunk [2]int) error {
 	}()
 
 	fmt.Println("save part", part, "for url", url)
-	_, _ = io.Copy(ioutil.Discard, resp.Body)
+	// _, _ = io.Copy(ioutil.Discard, resp.Body)
 
-	return nil
+	b, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read all (fetch), %w", err)
+	}
+
+	return b, nil
 }
