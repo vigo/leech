@@ -7,6 +7,14 @@ macOS application!
 
 ---
 
+## Todo
+
+- Download progress bar
+- Bandwidth limiter
+- Resume file
+
+---
+
 ## Usage
 
 @wip

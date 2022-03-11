@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -49,6 +50,22 @@ func flagUsage(code int, out io.Writer) func() {
 	}
 }
 
+func isPiped() bool {
+	fileInfo, _ := os.Stdin.Stat()
+	return fileInfo.Mode()&os.ModeCharDevice == 0
+}
+
+func parseValidateURL(in string) (string, error) {
+	u, err := url.ParseRequestURI(in)
+	if err != nil {
+		return "", fmt.Errorf("%s %w", errInvalidURL.Error(), err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", errInvalidURL
+	}
+	return u.String(), nil
+}
+
 // NewCLIApplication creates new app instance.
 func NewCLIApplication() *CLIApplication {
 	flag.Usage = flagUsage(0, os.Stdin)
@@ -72,26 +89,10 @@ func NewCLIApplication() *CLIApplication {
 	}
 }
 
-func (c *CLIApplication) isPiped() bool {
-	fileInfo, _ := os.Stdin.Stat()
-	return fileInfo.Mode()&os.ModeCharDevice == 0
-}
-
-func (c *CLIApplication) parseValidateURL(in string) (string, error) {
-	u, err := url.ParseRequestURI(in)
-	if err != nil {
-		return "", fmt.Errorf("%s %w", errInvalidURL.Error(), err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", errInvalidURL
-	}
-	return u.String(), nil
-}
-
 func (c *CLIApplication) parsePipe(r io.Reader) error {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		url, err := c.parseValidateURL(scanner.Text())
+		url, err := parseValidateURL(scanner.Text())
 		if err == nil {
 			c.URLS = append(c.URLS, url)
 		}
@@ -105,7 +106,7 @@ func (c *CLIApplication) parsePipe(r io.Reader) error {
 func (c *CLIApplication) parseArgs() {
 	if len(flag.Args()) > 0 {
 		for _, arg := range flag.Args() {
-			url, err := c.parseValidateURL(arg)
+			url, err := parseValidateURL(arg)
 			if err == nil {
 				c.URLS = append(c.URLS, url)
 			}
@@ -132,10 +133,11 @@ func (c *CLIApplication) getChunks(length int, chunkSize int) [][2]int {
 }
 
 type resource struct {
-	url      string
-	filename string
-	length   int64
-	chunks   [][2]int
+	chunks      [][2]int
+	url         string
+	filename    string
+	contentType string
+	length      int64
 }
 
 func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
@@ -171,6 +173,11 @@ func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 		}
 	}
 
+	contentType, ok := resp.Header["Content-Type"]
+	if ok {
+		r.contentType = contentType[0]
+	}
+
 	contentDisposition, ok := resp.Header["Content-Disposition"]
 	if ok {
 		_, params, err := mime.ParseMediaType(contentDisposition[0])
@@ -178,7 +185,34 @@ func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 			r.filename = params["filename"]
 		}
 	}
+
+	if r.filename == "" {
+		basename := filepath.Base(url)
+		r.filename = basename
+		if r.contentType != "" {
+			ext := findExtension(r.contentType)
+			if ext != "unknown" {
+				r.filename = basename + "." + ext
+			}
+		}
+	}
+
 	return r, nil
+}
+
+func findExtension(mimeType string) string {
+	switch mimeType {
+	case "image/jpeg":
+		return "jpg"
+	case "video/mp4":
+		return "mp4"
+	default:
+		ext, err := mime.ExtensionsByType(mimeType)
+		if err != nil {
+			return "unknown"
+		}
+		return ext[0]
+	}
 }
 
 // Run executes CLIApplication.
@@ -188,7 +222,7 @@ func (c *CLIApplication) Run() error {
 		return nil
 	}
 
-	if c.isPiped() {
+	if isPiped() {
 		if err := c.parsePipe(c.In); err != nil {
 			return err
 		}
@@ -254,7 +288,7 @@ func (c *CLIApplication) download(r *resource, done chan struct{}) {
 
 		fmt.Printf("%+v\n", r)
 
-		f, err := os.Create("/tmp/foo.jpg")
+		f, err := os.Create(r.filename)
 		if err != nil {
 			log.Fatal(err)
 		}
