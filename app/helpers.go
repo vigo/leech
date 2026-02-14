@@ -17,7 +17,10 @@ const (
 )
 
 func isPiped() bool {
-	fileInfo, _ := os.Stdin.Stat()
+	fileInfo, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
 	return fileInfo.Mode()&os.ModeCharDevice == 0
 }
 
@@ -106,6 +109,10 @@ func parseRate(s string) (int64, error) {
 	num, err := strconv.ParseFloat(numStr, bitSize64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid rate: %s", s)
+	}
+
+	if num < 0 {
+		return 0, fmt.Errorf("rate must be non-negative: %s", s)
 	}
 
 	return int64(num * float64(multiplier)), nil

@@ -1,7 +1,11 @@
 package app
 
 var cmdUsage = `
-usage: %[1]s [-flags] URL URL URL ...
+usage:
+
+  %[1]s [-flags] URL URL URL ...
+
+  cat files.txt | %[1]s [-flags]
 
   flags:
 

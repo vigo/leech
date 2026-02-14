@@ -122,6 +122,8 @@ func TestParseRate(t *testing.T) {
 		{"1G", 1024 * 1024 * 1024, false},
 		{"1.5M", int64(1.5 * 1024 * 1024), false},
 		{"abc", 0, true},
+		{"-5M", 0, true},
+		{"-100K", 0, true},
 	}
 
 	for _, tt := range tests {

@@ -75,9 +75,15 @@ type rateLimitedReader struct {
 }
 
 func (r *rateLimitedReader) Read(p []byte) (int, error) {
+	// cap read size to rate limit to avoid large bursts
+	if r.limiter.rate > 0 && int64(len(p)) > r.limiter.rate {
+		p = p[:r.limiter.rate]
+	}
+
 	n, err := r.reader.Read(p)
 	if n > 0 {
 		r.limiter.wait(n)
 	}
+
 	return n, err
 }

@@ -33,7 +33,6 @@ type CLIApplication struct {
 	chunkSize int
 	outputDir string
 	verbose   bool
-	rateLimit int64
 	limiter   *rateLimiter
 }
 
@@ -86,7 +85,6 @@ func (c *CLIApplication) parseFlags() error {
 	c.chunkSize = flagChunkSize
 	c.outputDir = flagOutput
 	c.verbose = flagVerbose
-	c.rateLimit = rate
 	c.limiter = newRateLimiter(rate)
 
 	return nil
