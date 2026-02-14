@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"math"
 	"mime"
 	"net/url"
 	"os"
@@ -115,7 +116,12 @@ func parseRate(s string) (int64, error) {
 		return 0, fmt.Errorf("rate must be non-negative: %s", s)
 	}
 
-	return int64(num * float64(multiplier)), nil
+	result := num * float64(multiplier)
+	if result > float64(math.MaxInt64) {
+		return 0, fmt.Errorf("rate value too large: %s", s)
+	}
+
+	return int64(result), nil
 }
 
 // formatBytes formats byte count to human readable string.

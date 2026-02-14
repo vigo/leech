@@ -17,6 +17,7 @@ import (
 
 const (
 	progressUpdateInterval = 200 * time.Millisecond
+	timeoutSafetyFactor    = 3
 	logKeyURL              = "url"
 	logKeyError            = "error"
 )
@@ -242,8 +243,20 @@ func (c *CLIApplication) downloadSingle(r *resource, outputPath, partPath string
 
 func (c *CLIApplication) fetch(url string, chunk [2]int, downloaded *atomic.Int64) ([]byte, error) {
 	start, end := chunk[0], chunk[1]
+	chunkBytes := int64(end - start + 1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	timeout := 30 * time.Second
+	if c.limiter != nil && c.limiter.rate > 0 {
+		expected := time.Duration(chunkBytes/c.limiter.rate+1) * time.Second
+		if needed := expected * timeoutSafetyFactor; needed > timeout {
+			timeout = needed
+		}
+	}
+	if timeout > 30*time.Minute {
+		timeout = 30 * time.Minute
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
