@@ -66,7 +66,7 @@ func TestGetChunks(t *testing.T) {
 	}
 
 	// verify no gaps or overlaps
-	total := 0
+	var total int64
 	for i, c := range chunks {
 		size := c[1] - c[0] + 1
 		total += size
@@ -85,10 +85,10 @@ func TestGetChunksSmallFile(t *testing.T) {
 	if len(chunks) != 3 {
 		t.Fatalf("expected 3 chunks, got %d", len(chunks))
 	}
-	if chunks[0] != [2]int{0, 0} {
+	if chunks[0] != [2]int64{0, 0} {
 		t.Errorf("chunk[0] = %v, want [0, 0]", chunks[0])
 	}
-	if chunks[2] != [2]int{2, 2} {
+	if chunks[2] != [2]int64{2, 2} {
 		t.Errorf("chunk[2] = %v, want [2, 2]", chunks[2])
 	}
 }
@@ -98,7 +98,7 @@ func TestGetChunksSingleByte(t *testing.T) {
 	if len(chunks) != 1 {
 		t.Fatalf("expected 1 chunk, got %d", len(chunks))
 	}
-	if chunks[0] != [2]int{0, 0} {
+	if chunks[0] != [2]int64{0, 0} {
 		t.Errorf("chunk[0] = %v, want [0, 0]", chunks[0])
 	}
 }
@@ -140,6 +140,58 @@ func TestParseRate(t *testing.T) {
 				t.Errorf("parseRate(%q) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDeduplicateFilenames(t *testing.T) {
+	resources := []*resource{
+		{filename: "file.zip"},
+		{filename: "file.zip"},
+		{filename: "other.tar.gz"},
+		{filename: "file.zip"},
+	}
+
+	deduplicateFilenames(resources)
+
+	want := []string{"file.zip", "file_1.zip", "other.tar.gz", "file_2.zip"}
+	for i, r := range resources {
+		if r.filename != want[i] {
+			t.Errorf("resources[%d].filename = %q, want %q", i, r.filename, want[i])
+		}
+	}
+}
+
+func TestDeduplicateFilenamesWithExistingSuffix(t *testing.T) {
+	resources := []*resource{
+		{filename: "file.zip"},
+		{filename: "file_1.zip"},
+		{filename: "file.zip"},
+	}
+
+	deduplicateFilenames(resources)
+
+	want := []string{"file.zip", "file_1.zip", "file_2.zip"}
+	for i, r := range resources {
+		if r.filename != want[i] {
+			t.Errorf("resources[%d].filename = %q, want %q", i, r.filename, want[i])
+		}
+	}
+}
+
+func TestDeduplicateFilenamesNoDuplicates(t *testing.T) {
+	resources := []*resource{
+		{filename: "a.zip"},
+		{filename: "b.zip"},
+		{filename: "c.zip"},
+	}
+
+	deduplicateFilenames(resources)
+
+	want := []string{"a.zip", "b.zip", "c.zip"}
+	for i, r := range resources {
+		if r.filename != want[i] {
+			t.Errorf("resources[%d].filename = %q, want %q", i, r.filename, want[i])
+		}
 	}
 }
 

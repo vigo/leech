@@ -115,6 +115,9 @@ func (c *CLIApplication) parsePipe(r io.Reader) error {
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("failed to read input: %w", err)
+	}
 	if len(c.URLS) == 0 {
 		return errEmptyPipe
 	}
@@ -193,6 +196,8 @@ func (c *CLIApplication) Run() error {
 	if len(resources) == 0 {
 		return errors.New("no valid resources found")
 	}
+
+	deduplicateFilenames(resources)
 
 	// phase 2: show summary and check disk space
 	slog.Info("download summary",

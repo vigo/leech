@@ -103,7 +103,27 @@ func TestGetResourceInformation404(t *testing.T) {
 	}
 }
 
-func TestFetch(t *testing.T) {
+func TestGetResourceInformationQueryParams(t *testing.T) {
+	content := []byte("signed url content")
+	ts := newTestServer(content, false)
+	defer ts.Close()
+
+	app := &CLIApplication{
+		Client:    ts.Client(),
+		chunkSize: 5,
+	}
+
+	r, err := app.getResourceInformation(ts.URL + "/file.zip?X-Amz-Signature=abc123&expires=999")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if r.filename != "file.zip" {
+		t.Errorf("filename = %q, want 'file.zip' (query params should be stripped)", r.filename)
+	}
+}
+
+func TestFetchToFile(t *testing.T) {
 	content := []byte("0123456789abcdef")
 	ts := newTestServer(content, true)
 	defer ts.Close()
@@ -113,20 +133,34 @@ func TestFetch(t *testing.T) {
 		limiter: newRateLimiter(0),
 	}
 
-	var counter atomic.Int64
-	data, err := app.fetch(ts.URL+"/file.bin", [2]int{0, 7}, &counter)
+	f, err := os.CreateTemp(t.TempDir(), "fetch-*.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "01234567" {
-		t.Errorf("fetch returned %q, want '01234567'", string(data))
+	defer func() { _ = f.Close() }()
+
+	if err := f.Truncate(int64(len(content))); err != nil {
+		t.Fatal(err)
+	}
+
+	var counter atomic.Int64
+	if err := app.fetchToFile(ts.URL+"/file.bin", [2]int64{0, 7}, f, &counter); err != nil {
+		t.Fatal(err)
+	}
+
+	got := make([]byte, 8)
+	if _, err := f.ReadAt(got, 0); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "01234567" {
+		t.Errorf("fetchToFile wrote %q, want '01234567'", string(got))
 	}
 	if counter.Load() != 8 {
 		t.Errorf("counter = %d, want 8", counter.Load())
 	}
 }
 
-func TestFetchMiddleChunk(t *testing.T) {
+func TestFetchToFileMiddleChunk(t *testing.T) {
 	content := []byte("0123456789abcdef")
 	ts := newTestServer(content, true)
 	defer ts.Close()
@@ -136,13 +170,27 @@ func TestFetchMiddleChunk(t *testing.T) {
 		limiter: newRateLimiter(0),
 	}
 
-	var counter atomic.Int64
-	data, err := app.fetch(ts.URL+"/file.bin", [2]int{4, 9}, &counter)
+	f, err := os.CreateTemp(t.TempDir(), "fetch-*.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "456789" {
-		t.Errorf("fetch returned %q, want '456789'", string(data))
+	defer func() { _ = f.Close() }()
+
+	if err := f.Truncate(int64(len(content))); err != nil {
+		t.Fatal(err)
+	}
+
+	var counter atomic.Int64
+	if err := app.fetchToFile(ts.URL+"/file.bin", [2]int64{4, 9}, f, &counter); err != nil {
+		t.Fatal(err)
+	}
+
+	got := make([]byte, 6)
+	if _, err := f.ReadAt(got, 4); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "456789" {
+		t.Errorf("fetchToFile wrote %q, want '456789'", string(got))
 	}
 	if counter.Load() != 6 {
 		t.Errorf("counter = %d, want 6", counter.Load())

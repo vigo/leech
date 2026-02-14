@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -52,28 +53,28 @@ func findExtension(mimeType string) string {
 }
 
 // getChunks splits a byte range into N equal-ish chunks.
-func getChunks(length int, chunkSize int) [][2]int {
+func getChunks(length int64, chunkSize int) [][2]int64 {
 	if length <= 0 || chunkSize <= 0 {
 		return nil
 	}
 
 	// don't create more chunks than bytes
-	if chunkSize > length {
-		chunkSize = length
+	if int64(chunkSize) > length {
+		chunkSize = int(length)
 	}
 
-	out := make([][2]int, 0, chunkSize)
-	chunkLen := length / chunkSize
-	remainder := length % chunkSize
+	out := make([][2]int64, 0, chunkSize)
+	chunkLen := length / int64(chunkSize)
+	remainder := length % int64(chunkSize)
 
-	start := 0
+	var start int64
 	for range chunkSize {
 		end := start + chunkLen - 1
 		if remainder > 0 {
 			end++
 			remainder--
 		}
-		out = append(out, [2]int{start, end})
+		out = append(out, [2]int64{start, end})
 		start = end + 1
 	}
 
@@ -122,6 +123,35 @@ func parseRate(s string) (int64, error) {
 	}
 
 	return int64(result), nil
+}
+
+// deduplicateFilenames renames duplicate filenames by appending a counter.
+func deduplicateFilenames(resources []*resource) {
+	used := make(map[string]bool)
+
+	for _, r := range resources {
+		if !used[r.filename] {
+			used[r.filename] = true
+
+			continue
+		}
+
+		ext := filepath.Ext(r.filename)
+		base := strings.TrimSuffix(r.filename, ext)
+		counter := 1
+
+		for {
+			candidate := fmt.Sprintf("%s_%d%s", base, counter, ext)
+			if !used[candidate] {
+				r.filename = candidate
+				used[candidate] = true
+
+				break
+			}
+
+			counter++
+		}
+	}
 }
 
 // formatBytes formats byte count to human readable string.

@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,7 +23,7 @@ const (
 )
 
 type resource struct {
-	chunks      [][2]int
+	chunks      [][2]int64
 	url         string
 	filename    string
 	contentType string
@@ -61,7 +61,7 @@ func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 
 	acceptRanges, ok := resp.Header["Accept-Ranges"]
 	if ok && resp.ContentLength > 0 && len(acceptRanges) > 0 && acceptRanges[0] == "bytes" {
-		r.chunks = getChunks(int(resp.ContentLength), c.chunkSize)
+		r.chunks = getChunks(resp.ContentLength, c.chunkSize)
 	}
 
 	if ct, ok := resp.Header["Content-Type"]; ok {
@@ -79,7 +79,13 @@ func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 	}
 
 	if r.filename == "" {
-		basename := filepath.Base(url)
+		parsed, _ := neturl.Parse(r.url)
+		basename := filepath.Base(parsed.Path)
+
+		if basename == "" || basename == "." || basename == "/" {
+			basename = "download"
+		}
+
 		r.filename = basename
 		if r.contentType != "" && filepath.Ext(basename) == "" {
 			ext := findExtension(r.contentType)
@@ -127,30 +133,8 @@ func (c *CLIApplication) download(r *resource, done chan downloadResult, pd *pro
 
 		for i, chunkPair := range r.chunks {
 			wg.Go(func() {
-				byteParts, err := c.fetch(r.url, chunkPair, &downloaded)
-				if err != nil {
+				if err := c.fetchToFile(r.url, chunkPair, f, &downloaded); err != nil {
 					slog.Error("chunk download failed", logKeyURL, r.url, "part", i, logKeyError, err)
-					errMu.Lock()
-					fetchErr = err
-					errMu.Unlock()
-
-					return
-				}
-
-				expected := chunkPair[1] - chunkPair[0] + 1
-				if len(byteParts) != expected {
-					slog.Error("chunk size mismatch",
-						logKeyURL, r.url, "part", i, "got", len(byteParts), "want", expected,
-					)
-					errMu.Lock()
-					fetchErr = fmt.Errorf("chunk %d: got %d bytes, want %d", i, len(byteParts), expected)
-					errMu.Unlock()
-
-					return
-				}
-
-				if _, err := f.WriteAt(byteParts, int64(chunkPair[0])); err != nil {
-					slog.Error("chunk write failed", logKeyURL, r.url, "part", i, logKeyError, err)
 					errMu.Lock()
 					fetchErr = err
 					errMu.Unlock()
@@ -188,8 +172,7 @@ func (c *CLIApplication) download(r *resource, done chan downloadResult, pd *pro
 }
 
 func (c *CLIApplication) downloadSingle(r *resource, outputPath, partPath string, pd *progressDisplay) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 
 	offset := getResumeOffset(partPath)
 
@@ -252,38 +235,26 @@ func (c *CLIApplication) downloadSingle(r *resource, outputPath, partPath string
 	return finalizePart(partPath, outputPath)
 }
 
-func (c *CLIApplication) fetch(url string, chunk [2]int, downloaded *atomic.Int64) ([]byte, error) {
+func (c *CLIApplication) fetchToFile(url string, chunk [2]int64, f *os.File, downloaded *atomic.Int64) error {
 	start, end := chunk[0], chunk[1]
-	chunkBytes := int64(end - start + 1)
+	chunkBytes := end - start + 1
 
-	timeout := 30 * time.Second
-	if c.limiter != nil && c.limiter.rate > 0 {
-		expected := time.Duration(chunkBytes/c.limiter.rate+1) * time.Second
-		if needed := expected * timeoutSafetyFactor; needed > timeout {
-			timeout = needed
-		}
-	}
-	if timeout > 30*time.Minute {
-		timeout = 30 * time.Minute
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	ctx := context.Background()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("Range", "bytes="+strconv.Itoa(start)+"-"+strconv.Itoa(end))
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
+		return fmt.Errorf("failed to execute request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("chunk fetch failed: %w: returned %d", errHTTPStatusIsNotOK, resp.StatusCode)
+		return fmt.Errorf("chunk fetch failed: %w: returned %d", errHTTPStatusIsNotOK, resp.StatusCode)
 	}
 
 	slog.Debug("fetch response", logKeyURL, url, "status", resp.StatusCode, "range", fmt.Sprintf("%d-%d", start, end))
@@ -295,10 +266,16 @@ func (c *CLIApplication) fetch(url string, chunk [2]int, downloaded *atomic.Int6
 
 	reader = &countingReader{reader: reader, counter: downloaded}
 
-	b, err := io.ReadAll(reader)
+	writer := io.NewOffsetWriter(f, start)
+
+	written, err := io.Copy(writer, reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return fmt.Errorf("failed to write chunk: %w", err)
 	}
 
-	return b, nil
+	if written != chunkBytes {
+		return fmt.Errorf("chunk size mismatch: got %d bytes, want %d", written, chunkBytes)
+	}
+
+	return nil
 }

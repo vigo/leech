@@ -113,19 +113,54 @@ func (pd *progressDisplay) render() {
 		fmt.Fprintf(os.Stderr, "\033[%dA", pd.lines)
 	}
 
-	maxLen := 0
-	for _, e := range pd.entries {
-		if len(e.filename) > maxLen {
-			maxLen = len(e.filename)
+	termWidth := terminalWidth()
+
+	// pre-compute bars and find max lengths
+	bars := make([]string, len(pd.entries))
+	maxBarLen := 0
+	maxNameLen := 0
+
+	for i, e := range pd.entries {
+		bars[i] = formatProgressBar(e.current.Load(), e.total)
+		if len(bars[i]) > maxBarLen {
+			maxBarLen = len(bars[i])
+		}
+		if len(e.filename) > maxNameLen {
+			maxNameLen = len(e.filename)
 		}
 	}
 
-	for _, e := range pd.entries {
-		bar := formatProgressBar(e.current.Load(), e.total)
-		fmt.Fprintf(os.Stderr, "\r\033[K%*s: %s\n", maxLen, e.filename, bar)
+	// ": " separator = 2 chars
+	const separatorLen = 2
+	const minNameWidth = 10
+
+	availableForName := termWidth - maxBarLen - separatorLen
+	if availableForName < minNameWidth {
+		availableForName = minNameWidth
+	}
+	if maxNameLen > availableForName {
+		maxNameLen = availableForName
+	}
+
+	for i, e := range pd.entries {
+		name := truncateFilename(e.filename, maxNameLen)
+		fmt.Fprintf(os.Stderr, "\r\033[K%*s: %s\n", maxNameLen, name, bars[i])
 	}
 
 	pd.lines = len(pd.entries)
+}
+
+func truncateFilename(name string, maxWidth int) string {
+	if len(name) <= maxWidth {
+		return name
+	}
+
+	const ellipsis = "..."
+	if maxWidth <= len(ellipsis) {
+		return name[:maxWidth]
+	}
+
+	return name[:maxWidth-len(ellipsis)] + ellipsis
 }
 
 // formatProgressBar renders: [████████░░░░░░░] 50% 5.0MB/10.0MB

@@ -82,6 +82,30 @@ func TestFormatProgressBarOverflow(t *testing.T) {
 	}
 }
 
+func TestTruncateFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		maxWidth int
+		want     string
+	}{
+		{"short enough", "file.zip", 20, "file.zip"},
+		{"exact fit", "file.zip", 8, "file.zip"},
+		{"needs truncation", "very-long-filename.zip", 12, "very-long..."},
+		{"minimal width", "abcdef", 3, "abc"},
+		{"ellipsis boundary", "abcdef", 4, "a..."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateFilename(tt.input, tt.maxWidth)
+			if got != tt.want {
+				t.Errorf("truncateFilename(%q, %d) = %q, want %q", tt.input, tt.maxWidth, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCountingReader(t *testing.T) {
 	data := strings.Repeat("x", 500)
 	r := strings.NewReader(data)

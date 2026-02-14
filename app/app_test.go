@@ -59,6 +59,45 @@ func TestParsePipeAllInvalid(t *testing.T) {
 	}
 }
 
+func TestParsePipeCRLineEndings(t *testing.T) {
+	app := &CLIApplication{}
+
+	input := "https://example.com/file1.zip\rhttps://example.com/file2.zip"
+	err := app.parsePipe(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(app.URLS) != 2 {
+		t.Errorf("expected 2 URLs with CR line endings, got %d", len(app.URLS))
+	}
+}
+
+func TestParsePipeCRLFLineEndings(t *testing.T) {
+	app := &CLIApplication{}
+
+	input := "https://example.com/file1.zip\r\nhttps://example.com/file2.zip\r\n"
+	err := app.parsePipe(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(app.URLS) != 2 {
+		t.Errorf("expected 2 URLs with CRLF line endings, got %d", len(app.URLS))
+	}
+}
+
+func TestParsePipeWhitespace(t *testing.T) {
+	app := &CLIApplication{}
+
+	input := "  https://example.com/file1.zip  \n\n  https://example.com/file2.zip\n\n"
+	err := app.parsePipe(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(app.URLS) != 2 {
+		t.Errorf("expected 2 URLs with whitespace, got %d", len(app.URLS))
+	}
+}
+
 func TestParseArgs(t *testing.T) {
 	app := &CLIApplication{}
 
