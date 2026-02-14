@@ -203,7 +203,7 @@ func (c *CLIApplication) Run() error {
 	slog.Info("starting downloads", "files", len(resources), "chunks", c.chunkSize)
 
 	pd := newProgressDisplay()
-	done := make(chan struct{})
+	done := make(chan int64, len(resources))
 
 	for _, r := range resources {
 		go c.download(r, done, pd)
@@ -211,15 +211,12 @@ func (c *CLIApplication) Run() error {
 
 	pd.start()
 
-	for i := range resources {
-		<-done
+	var completedSize int64
 
-		// check disk space after each download completes
-		remaining := totalSize
-		for _, r := range resources[:i+1] {
-			remaining -= r.length
-		}
+	for range resources {
+		completedSize += <-done
 
+		remaining := totalSize - completedSize
 		if remaining > 0 {
 			if err := checkDiskSpace(c.outputDir, remaining); err != nil {
 				slog.Error("disk space warning", logKeyError, err)

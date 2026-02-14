@@ -89,8 +89,8 @@ func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 	return r, nil
 }
 
-func (c *CLIApplication) download(r *resource, done chan struct{}, pd *progressDisplay) {
-	defer func() { done <- struct{}{} }()
+func (c *CLIApplication) download(r *resource, done chan int64, pd *progressDisplay) {
+	defer func() { done <- r.length }()
 
 	outputPath := filepath.Join(c.outputDir, r.filename)
 	partPath := outputPath + ".part"

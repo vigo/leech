@@ -112,8 +112,8 @@ func parseRate(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid rate: %s", s)
 	}
 
-	if num < 0 {
-		return 0, fmt.Errorf("rate must be non-negative: %s", s)
+	if num < 0 || math.IsNaN(num) || math.IsInf(num, 0) {
+		return 0, fmt.Errorf("invalid rate value: %s", s)
 	}
 
 	result := num * float64(multiplier)
