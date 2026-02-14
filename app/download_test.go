@@ -205,7 +205,7 @@ func TestDownloadChunked(t *testing.T) {
 	}
 
 	pd := newProgressDisplay()
-	done := make(chan int64, 1)
+	done := make(chan downloadResult, 1)
 	go app.download(r, done, pd)
 	<-done
 
@@ -239,7 +239,7 @@ func TestDownloadSingleNoChunks(t *testing.T) {
 	}
 
 	pd2 := newProgressDisplay()
-	done := make(chan int64, 1)
+	done := make(chan downloadResult, 1)
 	go app.download(r, done, pd2)
 	<-done
 

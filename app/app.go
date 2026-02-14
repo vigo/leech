@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 )
 
 var (
@@ -102,9 +103,16 @@ func (c *CLIApplication) setupLogging() {
 func (c *CLIApplication) parsePipe(r io.Reader) error {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		url, err := parseValidateURL(scanner.Text())
-		if err == nil {
-			c.URLS = append(c.URLS, url)
+		for _, line := range strings.Split(scanner.Text(), "\r") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			url, err := parseValidateURL(line)
+			if err == nil {
+				c.URLS = append(c.URLS, url)
+			}
 		}
 	}
 	if len(c.URLS) == 0 {
@@ -203,7 +211,7 @@ func (c *CLIApplication) Run() error {
 	slog.Info("starting downloads", "files", len(resources), "chunks", c.chunkSize)
 
 	pd := newProgressDisplay()
-	done := make(chan int64, len(resources))
+	done := make(chan downloadResult, len(resources))
 
 	for _, r := range resources {
 		go c.download(r, done, pd)
@@ -215,12 +223,12 @@ func (c *CLIApplication) Run() error {
 	var failCount int
 
 	for range resources {
-		size := <-done
-		if size == 0 {
+		result := <-done
+		if !result.ok {
 			failCount++
 		}
 
-		completedSize += size
+		completedSize += result.size
 
 		remaining := totalSize - completedSize
 		if remaining > 0 {

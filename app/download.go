@@ -30,6 +30,11 @@ type resource struct {
 	length      int64
 }
 
+type downloadResult struct {
+	size int64
+	ok   bool
+}
+
 func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -89,9 +94,12 @@ func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 	return r, nil
 }
 
-func (c *CLIApplication) download(r *resource, done chan int64, pd *progressDisplay) {
-	var completed int64
-	defer func() { done <- completed }()
+func (c *CLIApplication) download(r *resource, done chan downloadResult, pd *progressDisplay) {
+	var success bool
+	defer func() {
+		size := max(r.length, 0)
+		done <- downloadResult{size: size, ok: success}
+	}()
 
 	outputPath := filepath.Join(c.outputDir, r.filename)
 	partPath := outputPath + ".part"
@@ -174,7 +182,7 @@ func (c *CLIApplication) download(r *resource, done chan int64, pd *progressDisp
 		}
 	}
 
-	completed = r.length
+	success = true
 
 	slog.Info("download complete", "file", r.filename, "size", formatBytes(r.length))
 }
