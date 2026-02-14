@@ -1,88 +1,86 @@
+version: "2"
+
 run:
   concurrency: 4
-  timeout: 1m
+  timeout: 5m
 
-linters-settings:
-  revive:
-    ignore-generated-header: true
-    severity: warning
-    rules:
-      - name: exported
-        severity: warning
-      - name: error-return
-        severity: warning
-      - name: error-naming
-        severity: warning
-      - name: if-return
-        severity: warning
-      - name: var-naming
-        severity: warning
-      - name: var-declaration
-        severity: warning
-      - name: receiver-naming
-        severity: warning
-      - name: errorf
-        severity: warning
-      - name: empty-block
-        severity: warning
-      - name: unused-parameter
-        severity: warning
-      - name: unreachable-code
-        severity: warning
-      - name: redefines-builtin-id
-        severity: warning
-      - name: superfluous-else
-        severity: warning
-      - name: unexported-return
-        severity: warning
-      - name: indent-error-flow
-        severity: warning
-      - name: blank-imports
-        severity: warning
-      - name: range
-        severity: warning
-      - name: time-naming
-        severity: warning
-      - name: context-as-argument
-        severity: warning
-      - name: context-keys-type
-        severity: warning
-      - name: indent-error-flow
-        severity: warning
-      - name: waitgroup-by-value
-        severity: warning
-      - name: useless-break
-        severity: warning
-      - name: struct-tag
-        severity: warning
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/vigo/leech
 
 linters:
-  disable-all: true
+  default: none
   enable:
-    - asciicheck 
-    - durationcheck 
-    - errcheck 
-    - errorlint 
-    - exhaustive 
-    - gosec 
-    - govet 
-    - makezero 
-    - nilerr 
-    - rowserrcheck 
-    - exportloopref 
-    - sqlclosecheck 
-    - staticcheck 
-    - typecheck 
-    - bodyclose 
-    - noctx 
-    - prealloc
-    - gosimple
-  presets:
-    - comment 
-    - error 
-    - format 
-    - metalinter 
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
     - unused
+    - gosec
+    - revive
+    - noctx
+    - bodyclose
+    - errorlint
+    - nilerr
+    - copyloopvar
+    - intrange
+    - perfsprint
+    - unconvert
+    - unparam
+    - wastedassign
+    - errname
+    - canonicalheader
+    - fatcontext
 
-issues:
-  exclude-use-default: false
+  settings:
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: package-comments
+          disabled: true
+        - name: unused-parameter
+          arguments:
+            - allow-regex: "^_"
+        - name: add-constant
+          arguments:
+            - max-lit-count: "3"
+              allow-strs: '"","err"'
+              allow-ints: "0,1,2,5,10,30,100"
+              allow-floats: "1.0"
+        - name: cognitive-complexity
+          disabled: true
+        - name: cyclomatic
+          disabled: true
+        - name: function-length
+          arguments: [75, 0]
+        - name: line-length-limit
+          arguments: [120]
+        - name: deep-exit
+          disabled: true
+
+    govet:
+      enable:
+        - shadow
+
+    perfsprint:
+      strconcat: false
+
+  exclusions:
+    warn-unused: true
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - bodyclose
+          - errcheck
+          - gosec
+          - noctx
+          - unparam
+          - revive

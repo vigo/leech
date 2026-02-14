@@ -2,21 +2,13 @@ package app
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"log"
-	"mime"
+	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
-	"path/filepath"
-	"strconv"
-	"sync"
-	"time"
 )
 
 var (
@@ -26,67 +18,87 @@ var (
 	errHTTPStatusIsNotOK = errors.New("http status is not ok")
 )
 
-const defaultChunkSize = 5
+const (
+	defaultChunkSize = 5
+	permDir          = 0o750
+	permFile         = 0o600
+)
 
-// CLIApplication represents new app instance.
+// CLIApplication represents the download manager instance.
 type CLIApplication struct {
-	In     io.Reader
-	Out    io.Writer
-	URLS   []string
-	Client *http.Client
+	In        io.Reader
+	Out       io.Writer
+	URLS      []string
+	Client    *http.Client
+	chunkSize int
+	outputDir string
+	verbose   bool
+	rateLimit int64
+	limiter   *rateLimiter
 }
 
-func flagUsage(code int, out io.Writer) func() {
-	return func() {
-		fmt.Fprintf(
-			out,
-			cmdUsage,
-			os.Args[0],
-			Version,
-		)
-		if code > 0 {
-			os.Exit(code)
-		}
-	}
-}
-
-func isPiped() bool {
-	fileInfo, _ := os.Stdin.Stat()
-	return fileInfo.Mode()&os.ModeCharDevice == 0
-}
-
-func parseValidateURL(in string) (string, error) {
-	u, err := url.ParseRequestURI(in)
-	if err != nil {
-		return "", fmt.Errorf("%s %w", errInvalidURL.Error(), err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", errInvalidURL
-	}
-	return u.String(), nil
-}
-
-// NewCLIApplication creates new app instance.
+// NewCLIApplication creates and configures a new CLI app instance.
 func NewCLIApplication() *CLIApplication {
-	flag.Usage = flagUsage(0, os.Stdin)
-
-	optFlagVersion = flag.Bool("version", false, "display version information ("+Version+")")
-	optFlagVerbose = flag.Bool("verbose", false, "verbose output")
-	optFlagChunkSize = flag.Int("chunks", defaultChunkSize, "default chunk size")
-
-	flag.Parse()
-
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DisableCompression = true
-	client := &http.Client{
-		Transport: transport,
-	}
 
 	return &CLIApplication{
 		In:     os.Stdin,
 		Out:    os.Stdout,
-		Client: client,
+		Client: &http.Client{Transport: transport},
 	}
+}
+
+var errVersionRequested = errors.New("")
+
+func (c *CLIApplication) parseFlags() error {
+	var (
+		flagVersion   bool
+		flagVerbose   bool
+		flagChunkSize int
+		flagLimit     string
+		flagOutput    string
+	)
+
+	flag.BoolVar(&flagVersion, "version", false, "display version information ("+Version+")")
+	flag.BoolVar(&flagVerbose, "verbose", false, "verbose output / debug logging")
+	flag.IntVar(&flagChunkSize, "chunks", defaultChunkSize, "chunk size for parallel download")
+	flag.StringVar(&flagLimit, "limit", "0", "bandwidth limit (e.g. 5M, 500K, 0=unlimited)")
+	flag.StringVar(&flagOutput, "output", ".", "output directory")
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, cmdUsage, os.Args[0], Version)
+	}
+
+	flag.Parse()
+
+	if flagVersion {
+		fmt.Fprintln(c.Out, Version)
+
+		return errVersionRequested
+	}
+
+	rate, err := parseRate(flagLimit)
+	if err != nil {
+		return fmt.Errorf("invalid limit: %w", err)
+	}
+
+	c.chunkSize = flagChunkSize
+	c.outputDir = flagOutput
+	c.verbose = flagVerbose
+	c.rateLimit = rate
+	c.limiter = newRateLimiter(rate)
+
+	return nil
+}
+
+func (c *CLIApplication) setupLogging() {
+	level := slog.LevelWarn
+	if c.verbose {
+		level = slog.LevelDebug
+	}
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(handler))
 }
 
 func (c *CLIApplication) parsePipe(r io.Reader) error {
@@ -103,230 +115,123 @@ func (c *CLIApplication) parsePipe(r io.Reader) error {
 	return nil
 }
 
-func (c *CLIApplication) parseArgs() {
-	if len(flag.Args()) > 0 {
-		for _, arg := range flag.Args() {
-			url, err := parseValidateURL(arg)
-			if err == nil {
-				c.URLS = append(c.URLS, url)
-			}
-		}
-	}
-}
-
-func (c *CLIApplication) getChunks(length int, chunkSize int) [][2]int {
-	out := [][2]int{}
-
-	chunk := length / chunkSize
-
-	start := 0
-	end := 0
-	for i := 0; i < chunkSize-1; i++ {
-		start = i * (chunk + 1)
-		end = start + chunk
-		out = append(out, [2]int{start, end})
-	}
-	start = start + chunk + 1
-	end = length - 1
-	out = append(out, [2]int{start, end})
-	return out
-}
-
-type resource struct {
-	chunks      [][2]int
-	url         string
-	filename    string
-	contentType string
-	length      int64
-}
-
-func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to Request, %w", err)
-	}
-
-	resp, err := c.Client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to Do request, %w", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w, returned %d", errHTTPStatusIsNotOK, resp.StatusCode)
-	}
-
-	r := &resource{
-		url:    url,
-		length: resp.ContentLength,
-	}
-
-	acceptRanges, ok := resp.Header["Accept-Ranges"]
-	if ok {
-		if resp.ContentLength > 0 && len(acceptRanges) > 0 && acceptRanges[0] == "bytes" {
-			r.chunks = c.getChunks(int(resp.ContentLength), *optFlagChunkSize)
-		}
-	}
-
-	contentType, ok := resp.Header["Content-Type"]
-	if ok {
-		r.contentType = contentType[0]
-	}
-
-	contentDisposition, ok := resp.Header["Content-Disposition"]
-	if ok {
-		_, params, err := mime.ParseMediaType(contentDisposition[0])
+func (c *CLIApplication) parseArgs(args []string) {
+	for _, arg := range args {
+		url, err := parseValidateURL(arg)
 		if err == nil {
-			r.filename = params["filename"]
+			c.URLS = append(c.URLS, url)
 		}
-	}
-
-	if r.filename == "" {
-		basename := filepath.Base(url)
-		r.filename = basename
-		if r.contentType != "" {
-			ext := findExtension(r.contentType)
-			if ext != "unknown" {
-				r.filename = basename + "." + ext
-			}
-		}
-	}
-
-	return r, nil
-}
-
-func findExtension(mimeType string) string {
-	switch mimeType {
-	case "image/jpeg":
-		return "jpg"
-	case "video/mp4":
-		return "mp4"
-	default:
-		ext, err := mime.ExtensionsByType(mimeType)
-		if err != nil {
-			return "unknown"
-		}
-		return ext[0]
 	}
 }
 
-// Run executes CLIApplication.
+// Run executes the download manager.
 func (c *CLIApplication) Run() error {
-	if *optFlagVersion {
-		fmt.Fprintln(c.Out, Version)
-		return nil
+	if err := c.parseFlags(); err != nil {
+		if errors.Is(err, errVersionRequested) {
+			return nil
+		}
+
+		return err
 	}
+
+	c.setupLogging()
 
 	if isPiped() {
 		if err := c.parsePipe(c.In); err != nil {
 			return err
 		}
 	}
-	c.parseArgs()
+	c.parseArgs(flag.Args())
 
 	if len(c.URLS) == 0 {
 		return errEmptyURL
 	}
 
-	fmt.Println("optFlagVerbose", *optFlagVerbose)
+	if err := os.MkdirAll(c.outputDir, permDir); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
 
-	resource := make(chan *resource)
+	// phase 1: collect resource info for all URLs (HEAD requests)
+	slog.Info("checking resources", "urls", len(c.URLS))
+
+	resChan := make(chan *resource)
 
 	for _, u := range c.URLS {
 		go func(url string) {
-			fmt.Println("firing ->", url)
+			slog.Debug("fetching resource info", logKeyURL, url)
 			r, err := c.getResourceInformation(url)
 			if err != nil {
-				fmt.Println("-> err", err)
+				slog.Error("resource info failed", logKeyURL, url, logKeyError, err)
+				resChan <- nil
+
+				return
 			}
-			resource <- r
+			resChan <- r
 		}(u)
 	}
 
-	var downloadsCount int
-	done := make(chan struct{})
+	var resources []*resource
+
+	var totalSize int64
 
 	for range c.URLS {
-		r := <-resource
+		r := <-resChan
 		if r != nil {
-			downloadsCount++
-			go c.download(r, done)
+			resources = append(resources, r)
+			if r.length > 0 {
+				totalSize += r.length
+			}
 		}
 	}
 
-	fmt.Println("downloadsCount", downloadsCount)
+	if len(resources) == 0 {
+		return errors.New("no valid resources found")
+	}
 
-	for i := 0; i < downloadsCount; i++ {
+	// phase 2: show summary and check disk space
+	slog.Info("download summary",
+		"files", len(resources),
+		"total_size", formatBytes(totalSize),
+		"output", c.outputDir,
+	)
+
+	if totalSize > 0 {
+		if err := checkDiskSpace(c.outputDir, totalSize); err != nil {
+			return err
+		}
+	}
+
+	// phase 3: start downloads
+	slog.Info("starting downloads", "files", len(resources), "chunks", c.chunkSize)
+
+	pd := newProgressDisplay()
+	done := make(chan struct{})
+
+	for _, r := range resources {
+		go c.download(r, done, pd)
+	}
+
+	pd.start()
+
+	for i := range resources {
 		<-done
+
+		// check disk space after each download completes
+		remaining := totalSize
+		for _, r := range resources[:i+1] {
+			remaining -= r.length
+		}
+
+		if remaining > 0 {
+			if err := checkDiskSpace(c.outputDir, remaining); err != nil {
+				slog.Error("disk space warning", logKeyError, err)
+			}
+		}
 	}
+
+	pd.finish()
+
+	slog.Info("all downloads complete", "count", len(resources))
+
 	return nil
-}
-
-func (c *CLIApplication) download(r *resource, done chan struct{}) {
-	fmt.Printf("%+v\n", r)
-	if r.chunks != nil {
-		var wg sync.WaitGroup
-
-		fcontent := make([]byte, r.length)
-
-		for i, chunkPair := range r.chunks {
-			wg.Add(1)
-			go func(part int, chunkPair [2]int) {
-				defer wg.Done()
-				byteParts, err := c.fetch(part, r.url, chunkPair)
-				if err == nil {
-					copy(fcontent[chunkPair[0]:], byteParts)
-				}
-			}(i, chunkPair)
-		}
-		wg.Wait()
-
-		fmt.Printf("%+v\n", r)
-
-		f, err := os.Create(r.filename)
-		if err != nil {
-			log.Fatal(err)
-		}
-		_, err = f.Write(fcontent)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer func() {
-			_ = f.Close()
-		}()
-
-	}
-	done <- struct{}{}
-}
-
-func (c *CLIApplication) fetch(part int, url string, chunk [2]int) ([]byte, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to Request (fetch), %w", err)
-	}
-	req.Header.Set("Range", "bytes="+strconv.Itoa(chunk[0])+"-"+strconv.Itoa(chunk[1]))
-
-	resp, err := c.Client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to Do (fetch), %w", err)
-	}
-	fmt.Println("Status Code", resp.StatusCode)
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	fmt.Println("save part", part, "for url", url)
-	// _, _ = io.Copy(ioutil.Discard, resp.Body)
-
-	b, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read all (fetch), %w", err)
-	}
-
-	return b, nil
 }
