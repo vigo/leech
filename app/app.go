@@ -212,9 +212,15 @@ func (c *CLIApplication) Run() error {
 	pd.start()
 
 	var completedSize int64
+	var failCount int
 
 	for range resources {
-		completedSize += <-done
+		size := <-done
+		if size == 0 {
+			failCount++
+		}
+
+		completedSize += size
 
 		remaining := totalSize - completedSize
 		if remaining > 0 {
@@ -225,6 +231,10 @@ func (c *CLIApplication) Run() error {
 	}
 
 	pd.finish()
+
+	if failCount > 0 {
+		return fmt.Errorf("%d download(s) failed", failCount)
+	}
 
 	slog.Info("all downloads complete", "count", len(resources))
 

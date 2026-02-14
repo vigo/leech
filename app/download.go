@@ -90,7 +90,8 @@ func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 }
 
 func (c *CLIApplication) download(r *resource, done chan int64, pd *progressDisplay) {
-	defer func() { done <- r.length }()
+	var completed int64
+	defer func() { done <- completed }()
 
 	outputPath := filepath.Join(c.outputDir, r.filename)
 	partPath := outputPath + ".part"
@@ -172,6 +173,8 @@ func (c *CLIApplication) download(r *resource, done chan int64, pd *progressDisp
 			return
 		}
 	}
+
+	completed = r.length
 
 	slog.Info("download complete", "file", r.filename, "size", formatBytes(r.length))
 }

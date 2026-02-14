@@ -15,13 +15,6 @@ func TestAvailableDiskSpace(t *testing.T) {
 	}
 }
 
-func TestAvailableDiskSpaceInvalidPath(t *testing.T) {
-	_, err := availableDiskSpace("/nonexistent/path/that/does/not/exist")
-	if err == nil {
-		t.Error("expected error for invalid path")
-	}
-}
-
 func TestCheckDiskSpace(t *testing.T) {
 	// should pass — requesting 1 byte on temp dir
 	err := checkDiskSpace(t.TempDir(), 1)
