@@ -126,8 +126,18 @@ func parseRate(s string) (int64, error) {
 }
 
 // deduplicateFilenames renames duplicate filenames by appending a counter.
-func deduplicateFilenames(resources []*resource) {
+// It also checks for files that already exist in outputDir.
+func deduplicateFilenames(resources []*resource, outputDir string) {
 	used := make(map[string]bool)
+
+	if outputDir != "" {
+		entries, _ := os.ReadDir(outputDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				used[e.Name()] = true
+			}
+		}
+	}
 
 	for _, r := range resources {
 		if !used[r.filename] {

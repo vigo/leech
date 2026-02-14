@@ -17,7 +17,6 @@ import (
 
 const (
 	progressUpdateInterval = 200 * time.Millisecond
-	timeoutSafetyFactor    = 3
 	logKeyURL              = "url"
 	logKeyError            = "error"
 )
@@ -35,8 +34,8 @@ type downloadResult struct {
 	ok   bool
 }
 
-func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (c *CLIApplication) getResourceInformation(ctx context.Context, url string) (*resource, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
@@ -100,10 +99,13 @@ func (c *CLIApplication) getResourceInformation(url string) (*resource, error) {
 	return r, nil
 }
 
-func (c *CLIApplication) download(r *resource, done chan downloadResult, pd *progressDisplay) {
+func (c *CLIApplication) download(ctx context.Context, r *resource, done chan downloadResult, pd *progressDisplay) {
 	var success bool
 	defer func() {
-		size := max(r.length, 0)
+		var size int64
+		if success {
+			size = max(r.length, 0)
+		}
 		done <- downloadResult{size: size, ok: success}
 	}()
 
@@ -115,6 +117,9 @@ func (c *CLIApplication) download(r *resource, done chan downloadResult, pd *pro
 		var downloaded atomic.Int64
 		var errMu sync.Mutex
 		var fetchErr error
+
+		chunkCtx, chunkCancel := context.WithCancel(ctx)
+		defer chunkCancel()
 
 		pd.add(r.filename, &downloaded, r.length)
 
@@ -133,11 +138,12 @@ func (c *CLIApplication) download(r *resource, done chan downloadResult, pd *pro
 
 		for i, chunkPair := range r.chunks {
 			wg.Go(func() {
-				if err := c.fetchToFile(r.url, chunkPair, f, &downloaded); err != nil {
+				if err := c.fetchToFile(chunkCtx, r.url, chunkPair, f, &downloaded); err != nil {
 					slog.Error("chunk download failed", logKeyURL, r.url, "part", i, logKeyError, err)
 					errMu.Lock()
 					fetchErr = err
 					errMu.Unlock()
+					chunkCancel()
 
 					return
 				}
@@ -160,7 +166,7 @@ func (c *CLIApplication) download(r *resource, done chan downloadResult, pd *pro
 			return
 		}
 	} else {
-		if err := c.downloadSingle(r, outputPath, partPath, pd); err != nil {
+		if err := c.downloadSingle(ctx, r, outputPath, partPath, pd); err != nil {
 			slog.Error("single download failed", logKeyURL, r.url, logKeyError, err)
 			return
 		}
@@ -171,9 +177,9 @@ func (c *CLIApplication) download(r *resource, done chan downloadResult, pd *pro
 	slog.Info("download complete", "file", r.filename, "size", formatBytes(r.length))
 }
 
-func (c *CLIApplication) downloadSingle(r *resource, outputPath, partPath string, pd *progressDisplay) error {
-	ctx := context.Background()
-
+func (c *CLIApplication) downloadSingle(
+	ctx context.Context, r *resource, outputPath, partPath string, pd *progressDisplay,
+) error {
 	offset := getResumeOffset(partPath)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.url, nil)
@@ -235,11 +241,11 @@ func (c *CLIApplication) downloadSingle(r *resource, outputPath, partPath string
 	return finalizePart(partPath, outputPath)
 }
 
-func (c *CLIApplication) fetchToFile(url string, chunk [2]int64, f *os.File, downloaded *atomic.Int64) error {
+func (c *CLIApplication) fetchToFile(
+	ctx context.Context, url string, chunk [2]int64, f *os.File, downloaded *atomic.Int64,
+) error {
 	start, end := chunk[0], chunk[1]
 	chunkBytes := end - start + 1
-
-	ctx := context.Background()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

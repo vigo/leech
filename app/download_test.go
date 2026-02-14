@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -50,7 +51,7 @@ func TestGetResourceInformation(t *testing.T) {
 		chunkSize: 3,
 	}
 
-	r, err := app.getResourceInformation(ts.URL + "/testfile")
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/testfile")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func TestGetResourceInformationNoRanges(t *testing.T) {
 		chunkSize: 5,
 	}
 
-	r, err := app.getResourceInformation(ts.URL + "/file.bin")
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/file.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestGetResourceInformation404(t *testing.T) {
 		chunkSize: 5,
 	}
 
-	_, err := app.getResourceInformation(ts.URL + "/missing")
+	_, err := app.getResourceInformation(context.Background(), ts.URL+"/missing")
 	if err == nil {
 		t.Error("expected error for 404 response")
 	}
@@ -113,7 +114,7 @@ func TestGetResourceInformationQueryParams(t *testing.T) {
 		chunkSize: 5,
 	}
 
-	r, err := app.getResourceInformation(ts.URL + "/file.zip?X-Amz-Signature=abc123&expires=999")
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/file.zip?X-Amz-Signature=abc123&expires=999")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +145,7 @@ func TestFetchToFile(t *testing.T) {
 	}
 
 	var counter atomic.Int64
-	if err := app.fetchToFile(ts.URL+"/file.bin", [2]int64{0, 7}, f, &counter); err != nil {
+	if err := app.fetchToFile(context.Background(), ts.URL+"/file.bin", [2]int64{0, 7}, f, &counter); err != nil {
 		t.Fatal(err)
 	}
 
@@ -181,7 +182,7 @@ func TestFetchToFileMiddleChunk(t *testing.T) {
 	}
 
 	var counter atomic.Int64
-	if err := app.fetchToFile(ts.URL+"/file.bin", [2]int64{4, 9}, f, &counter); err != nil {
+	if err := app.fetchToFile(context.Background(), ts.URL+"/file.bin", [2]int64{4, 9}, f, &counter); err != nil {
 		t.Fatal(err)
 	}
 
@@ -219,7 +220,7 @@ func TestDownloadSingle(t *testing.T) {
 	}
 
 	pd := newProgressDisplay()
-	err := app.downloadSingle(r, outputPath, partPath, pd)
+	err := app.downloadSingle(context.Background(), r, outputPath, partPath, pd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,14 +248,14 @@ func TestDownloadChunked(t *testing.T) {
 		outputDir: dir,
 	}
 
-	r, err := app.getResourceInformation(ts.URL + "/alphabet.bin")
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/alphabet.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	pd := newProgressDisplay()
 	done := make(chan downloadResult, 1)
-	go app.download(r, done, pd)
+	go app.download(context.Background(), r, done, pd)
 	<-done
 
 	outputPath := filepath.Join(dir, r.filename)
@@ -281,14 +282,14 @@ func TestDownloadSingleNoChunks(t *testing.T) {
 		outputDir: dir,
 	}
 
-	r, err := app.getResourceInformation(ts.URL + "/single.bin")
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/single.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	pd2 := newProgressDisplay()
 	done := make(chan downloadResult, 1)
-	go app.download(r, done, pd2)
+	go app.download(context.Background(), r, done, pd2)
 	<-done
 
 	outputPath := filepath.Join(dir, r.filename)
@@ -320,7 +321,7 @@ func TestGetResourceInformationContentDisposition(t *testing.T) {
 		chunkSize: 5,
 	}
 
-	r, err := app.getResourceInformation(ts.URL + "/download")
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/download")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +348,7 @@ func TestGetResourceInformationNoContentType(t *testing.T) {
 		chunkSize: 5,
 	}
 
-	r, err := app.getResourceInformation(ts.URL + "/plain.dat")
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/plain.dat")
 	if err != nil {
 		t.Fatal(err)
 	}

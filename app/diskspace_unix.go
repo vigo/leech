@@ -19,6 +19,10 @@ func availableDiskSpace(path string) (int64, error) {
 		return 0, fmt.Errorf("invalid block size: %d", stat.Bsize)
 	}
 
+	if stat.Bavail > math.MaxUint64/uint64(stat.Bsize) {
+		return math.MaxInt64, nil
+	}
+
 	available := stat.Bavail * uint64(stat.Bsize)
 	if available > math.MaxInt64 {
 		return math.MaxInt64, nil

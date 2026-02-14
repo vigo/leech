@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 )
 
@@ -21,6 +23,7 @@ var (
 
 const (
 	defaultChunkSize = 5
+	maxChunkSize     = 64
 	permDir          = 0o750
 	permFile         = 0o600
 )
@@ -81,6 +84,10 @@ func (c *CLIApplication) parseFlags() error {
 	rate, err := parseRate(flagLimit)
 	if err != nil {
 		return fmt.Errorf("invalid limit: %w", err)
+	}
+
+	if flagChunkSize < 1 || flagChunkSize > maxChunkSize {
+		return fmt.Errorf("chunks must be between 1 and %d", maxChunkSize)
 	}
 
 	c.chunkSize = flagChunkSize
@@ -160,6 +167,9 @@ func (c *CLIApplication) Run() error {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	// phase 1: collect resource info for all URLs (HEAD requests)
 	slog.Info("checking resources", "urls", len(c.URLS))
 
@@ -168,7 +178,7 @@ func (c *CLIApplication) Run() error {
 	for _, u := range c.URLS {
 		go func(url string) {
 			slog.Debug("fetching resource info", logKeyURL, url)
-			r, err := c.getResourceInformation(url)
+			r, err := c.getResourceInformation(ctx, url)
 			if err != nil {
 				slog.Error("resource info failed", logKeyURL, url, logKeyError, err)
 				resChan <- nil
@@ -197,7 +207,7 @@ func (c *CLIApplication) Run() error {
 		return errors.New("no valid resources found")
 	}
 
-	deduplicateFilenames(resources)
+	deduplicateFilenames(resources, c.outputDir)
 
 	// phase 2: show summary and check disk space
 	slog.Info("download summary",
@@ -218,11 +228,11 @@ func (c *CLIApplication) Run() error {
 	pd := newProgressDisplay()
 	done := make(chan downloadResult, len(resources))
 
-	for _, r := range resources {
-		go c.download(r, done, pd)
-	}
-
 	pd.start()
+
+	for _, r := range resources {
+		go c.download(ctx, r, done, pd)
+	}
 
 	var completedSize int64
 	var failCount int

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -151,7 +153,7 @@ func TestDeduplicateFilenames(t *testing.T) {
 		{filename: "file.zip"},
 	}
 
-	deduplicateFilenames(resources)
+	deduplicateFilenames(resources, "")
 
 	want := []string{"file.zip", "file_1.zip", "other.tar.gz", "file_2.zip"}
 	for i, r := range resources {
@@ -168,7 +170,7 @@ func TestDeduplicateFilenamesWithExistingSuffix(t *testing.T) {
 		{filename: "file.zip"},
 	}
 
-	deduplicateFilenames(resources)
+	deduplicateFilenames(resources, "")
 
 	want := []string{"file.zip", "file_1.zip", "file_2.zip"}
 	for i, r := range resources {
@@ -185,13 +187,36 @@ func TestDeduplicateFilenamesNoDuplicates(t *testing.T) {
 		{filename: "c.zip"},
 	}
 
-	deduplicateFilenames(resources)
+	deduplicateFilenames(resources, "")
 
 	want := []string{"a.zip", "b.zip", "c.zip"}
 	for i, r := range resources {
 		if r.filename != want[i] {
 			t.Errorf("resources[%d].filename = %q, want %q", i, r.filename, want[i])
 		}
+	}
+}
+
+func TestDeduplicateFilenamesExistingOnDisk(t *testing.T) {
+	dir := t.TempDir()
+
+	// create existing file on disk
+	if err := os.WriteFile(filepath.Join(dir, "file.zip"), []byte("x"), permFile); err != nil {
+		t.Fatal(err)
+	}
+
+	resources := []*resource{
+		{filename: "file.zip"},
+		{filename: "other.zip"},
+	}
+
+	deduplicateFilenames(resources, dir)
+
+	if resources[0].filename != "file_1.zip" {
+		t.Errorf("resources[0].filename = %q, want 'file_1.zip' (should avoid disk collision)", resources[0].filename)
+	}
+	if resources[1].filename != "other.zip" {
+		t.Errorf("resources[1].filename = %q, want 'other.zip'", resources[1].filename)
 	}
 }
 
