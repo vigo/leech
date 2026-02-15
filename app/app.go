@@ -52,7 +52,7 @@ func NewCLIApplication() *CLIApplication {
 	}
 }
 
-var errVersionRequested = errors.New("")
+var errVersionRequested = errors.New("version requested")
 
 func (c *CLIApplication) parseFlags() error {
 	var (

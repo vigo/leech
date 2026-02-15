@@ -19,6 +19,7 @@ const (
 	progressUpdateInterval = 200 * time.Millisecond
 	logKeyURL              = "url"
 	logKeyError            = "error"
+	logKeyFile             = "file"
 )
 
 type resource struct {
@@ -135,7 +136,11 @@ func (c *CLIApplication) download(ctx context.Context, r *resource, done chan do
 
 	success = true
 
-	slog.Info("download complete", "file", r.filename, "size", formatBytes(r.length))
+	if r.length > 0 {
+		slog.Info("download complete", logKeyFile, r.filename, "size", formatBytes(r.length))
+	} else {
+		slog.Info("download complete", logKeyFile, r.filename)
+	}
 }
 
 func (c *CLIApplication) downloadChunked(
@@ -221,7 +226,7 @@ func (c *CLIApplication) downloadSingle(
 
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
-		slog.Info("resuming download", "file", r.filename, "offset", formatBytes(offset))
+		slog.Info("resuming download", logKeyFile, r.filename, "offset", formatBytes(offset))
 	}
 
 	resp, err := c.Client.Do(req)
@@ -237,7 +242,7 @@ func (c *CLIApplication) downloadSingle(
 
 	// if server didn't honor Range request, restart from scratch
 	if offset > 0 && resp.StatusCode != http.StatusPartialContent {
-		slog.Info("server ignored range request, restarting", "file", r.filename)
+		slog.Info("server ignored range request, restarting", logKeyFile, r.filename)
 		offset = 0
 	}
 
