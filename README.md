@@ -29,11 +29,20 @@ macOS application!
 
 ## Installation
 
+### Homebrew (macOS)
+
+```bash
+brew tap vigo/leech
+brew install leech
+```
+
+### Go
+
 ```bash
 go install github.com/vigo/leech@latest
 ```
 
-Or build from source:
+### Build from source
 
 ```bash
 git clone https://github.com/vigo/leech.git
