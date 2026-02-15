@@ -420,3 +420,278 @@ func TestGetResourceInformationNoContentType(t *testing.T) {
 		t.Errorf("filename = %q, want 'plain.dat'", r.filename)
 	}
 }
+
+// --- Grup 2 kısmi: küçük boşluklar ---
+
+func TestFetchToFileNon206(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK) // 200 instead of 206
+		w.Write([]byte("data"))
+	}))
+	defer ts.Close()
+
+	app := &CLIApplication{
+		Client:  ts.Client(),
+		limiter: newRateLimiter(0),
+	}
+
+	f, err := os.CreateTemp(t.TempDir(), "fetch-*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var counter atomic.Int64
+	err = app.fetchToFile(context.Background(), ts.URL+"/file.bin", [2]int64{0, 7}, f, &counter)
+	if err == nil {
+		t.Error("expected error for non-206 response")
+	}
+}
+
+func TestFetchToFileCancelledContext(t *testing.T) {
+	ts := newTestServer([]byte("test data"), true)
+	defer ts.Close()
+
+	app := &CLIApplication{
+		Client:  ts.Client(),
+		limiter: newRateLimiter(0),
+	}
+
+	f, err := os.CreateTemp(t.TempDir(), "fetch-*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var counter atomic.Int64
+	err = app.fetchToFile(ctx, ts.URL+"/file.bin", [2]int64{0, 3}, f, &counter)
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+func TestGetResourceInformationRootURL(t *testing.T) {
+	content := []byte("root content")
+	ts := newTestServer(content, false)
+	defer ts.Close()
+
+	app := &CLIApplication{
+		Client:    ts.Client(),
+		chunkSize: 5,
+	}
+
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// root URL should fall back to "download" basename + extension from content type
+	if r.filename != "download.bin" {
+		t.Errorf("filename = %q, want 'download.bin' for root URL", r.filename)
+	}
+}
+
+// --- Grup 6: downloadChunked/Single error path'leri ---
+
+func TestDownloadChunkedOpenFileError(t *testing.T) {
+	content := []byte("test content for chunked")
+	ts := newTestServer(content, true)
+	defer ts.Close()
+
+	dir := t.TempDir()
+	readOnlyDir := filepath.Join(dir, "readonly")
+	if err := os.Mkdir(readOnlyDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &CLIApplication{
+		Client:    ts.Client(),
+		chunkSize: 3,
+		limiter:   newRateLimiter(0),
+		outputDir: readOnlyDir,
+	}
+
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var downloaded atomic.Int64
+	outputPath := filepath.Join(readOnlyDir, "file.bin")
+	partPath := outputPath + ".part"
+	ok := app.downloadChunked(context.Background(), r, outputPath, partPath, &downloaded)
+	if ok {
+		t.Error("expected downloadChunked to fail with read-only dir")
+	}
+}
+
+func TestDownloadSingle500(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	app := &CLIApplication{
+		Client:  ts.Client(),
+		limiter: newRateLimiter(0),
+	}
+
+	r := &resource{url: ts.URL + "/file.bin", filename: "file.bin", length: 100}
+
+	var counter atomic.Int64
+	err := app.downloadSingle(
+		context.Background(), r,
+		filepath.Join(dir, "file.bin"), filepath.Join(dir, "file.bin.part"),
+		&counter,
+	)
+	if err == nil {
+		t.Error("expected error for 500 response")
+	}
+}
+
+func TestDownloadSingleResumeRangeIgnored(t *testing.T) {
+	content := []byte("full content here")
+	// server ignores Range header, returns 200
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(content)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	partPath := filepath.Join(dir, "file.bin.part")
+	outputPath := filepath.Join(dir, "file.bin")
+
+	// create partial file to trigger resume logic
+	if err := os.WriteFile(partPath, []byte("partial"), permFile); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &CLIApplication{
+		Client:  ts.Client(),
+		limiter: newRateLimiter(0),
+	}
+
+	r := &resource{url: ts.URL + "/file.bin", filename: "file.bin", length: int64(len(content))}
+
+	var counter atomic.Int64
+	err := app.downloadSingle(context.Background(), r, outputPath, partPath, &counter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("got %q, want %q", got, content)
+	}
+}
+
+func TestDownloadSingleCancelledContext(t *testing.T) {
+	ts := newTestServer([]byte("data"), false)
+	defer ts.Close()
+
+	dir := t.TempDir()
+	app := &CLIApplication{
+		Client:  ts.Client(),
+		limiter: newRateLimiter(0),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := &resource{url: ts.URL + "/file.bin", filename: "file.bin", length: 4}
+
+	var counter atomic.Int64
+	err := app.downloadSingle(ctx, r,
+		filepath.Join(dir, "file.bin"), filepath.Join(dir, "file.bin.part"),
+		&counter,
+	)
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+// --- Grup 7: download orchestrator error path'leri ---
+
+func TestDownloadChunkedFailSingleFallbackFail(t *testing.T) {
+	// HEAD returns 200 with Accept-Ranges, all GETs return 500
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "100")
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.WriteHeader(http.StatusOK)
+
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	app := &CLIApplication{
+		Client:    ts.Client(),
+		chunkSize: 3,
+		limiter:   newRateLimiter(0),
+		outputDir: dir,
+	}
+
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pd := newProgressDisplay()
+	done := make(chan downloadResult, 1)
+	go app.download(context.Background(), r, done, pd)
+	result := <-done
+
+	if result.ok {
+		t.Error("expected download to fail")
+	}
+}
+
+func TestDownloadNoChunksSingleFail(t *testing.T) {
+	// HEAD returns 200 without Accept-Ranges, GET returns 500
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "100")
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	app := &CLIApplication{
+		Client:    ts.Client(),
+		chunkSize: 5,
+		limiter:   newRateLimiter(0),
+		outputDir: dir,
+	}
+
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pd := newProgressDisplay()
+	done := make(chan downloadResult, 1)
+	go app.download(context.Background(), r, done, pd)
+	result := <-done
+
+	if result.ok {
+		t.Error("expected download to fail")
+	}
+}

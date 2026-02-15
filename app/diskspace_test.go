@@ -33,3 +33,10 @@ func TestCheckDiskSpaceInsufficient(t *testing.T) {
 		t.Errorf("expected errNotEnoughDiskSpace, got %v", err)
 	}
 }
+
+func TestCheckDiskSpaceInvalidPath(t *testing.T) {
+	err := checkDiskSpace("/nonexistent/path/that/does/not/exist", 1)
+	if err == nil {
+		t.Error("expected error for invalid path")
+	}
+}
