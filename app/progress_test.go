@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestFormatProgressBar(t *testing.T) {
@@ -104,4 +105,31 @@ func TestCountingReader(t *testing.T) {
 	if counter.Load() != 500 {
 		t.Errorf("counter = %d, want 500", counter.Load())
 	}
+}
+
+func TestProgressStartFinishRender(t *testing.T) {
+	pd := newProgressDisplay()
+
+	var counter atomic.Int64
+	counter.Store(50)
+	pd.add("test-file.bin", &counter, 100)
+
+	pd.start()
+	time.Sleep(500 * time.Millisecond) // allow at least 1 render tick
+	pd.finish()
+}
+
+func TestProgressDisplayMultipleEntries(t *testing.T) {
+	pd := newProgressDisplay()
+
+	var c1, c2 atomic.Int64
+	c1.Store(30)
+	c2.Store(0)
+	pd.add("file1.bin", &c1, 100)
+	pd.add("file2.bin", &c2, 200)
+
+	pd.start()
+	c2.Store(100)
+	time.Sleep(500 * time.Millisecond)
+	pd.finish()
 }

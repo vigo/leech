@@ -44,3 +44,28 @@ func TestRateLimiterZeroMeansUnlimited(t *testing.T) {
 		t.Errorf("read %d bytes, want 1024", len(buf))
 	}
 }
+
+func TestRateLimitedReaderLargeBuffer(t *testing.T) {
+	data := strings.Repeat("x", 200)
+	r := strings.NewReader(data)
+
+	limiter := newRateLimiter(50) // 50 bytes/sec
+	lr := &rateLimitedReader{reader: r, limiter: limiter}
+
+	// use buffer larger than rate to trigger cap in Read
+	buf := make([]byte, 200)
+	n, err := lr.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n > 50 {
+		t.Errorf("read %d bytes, expected at most 50 (rate limit cap)", n)
+	}
+}
+
+func TestRateLimiterWaitLargeN(t *testing.T) {
+	limiter := newRateLimiter(100)
+	// wait for 250 bytes — triggers loop splitting into chunks of rl.rate
+	limiter.wait(250)
+}

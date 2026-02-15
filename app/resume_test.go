@@ -45,3 +45,10 @@ func TestFinalizePart(t *testing.T) {
 		t.Error("final file should exist after finalize")
 	}
 }
+
+func TestFinalizePartNonexistentPath(t *testing.T) {
+	err := finalizePart("/nonexistent/path/file.part", "/nonexistent/path/file")
+	if err == nil {
+		t.Error("expected error for nonexistent path")
+	}
+}
