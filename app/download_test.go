@@ -26,7 +26,10 @@ func newTestServer(content []byte, supportRanges bool) *httptest.Server {
 			rangeHeader := r.Header.Get("Range")
 			if rangeHeader != "" && supportRanges {
 				var start, end int
-				fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+				n, _ := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+				if n == 1 {
+					end = len(content) - 1
+				}
 				if end >= len(content) {
 					end = len(content) - 1
 				}
@@ -219,8 +222,8 @@ func TestDownloadSingle(t *testing.T) {
 		length:   int64(len(content)),
 	}
 
-	pd := newProgressDisplay()
-	err := app.downloadSingle(context.Background(), r, outputPath, partPath, pd)
+	var counter atomic.Int64
+	err := app.downloadSingle(context.Background(), r, outputPath, partPath, &counter)
 	if err != nil {
 		t.Fatal(err)
 	}

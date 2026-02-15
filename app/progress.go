@@ -12,24 +12,6 @@ import (
 
 const progressBarWidth = 30
 
-type progressReader struct {
-	reader     io.Reader
-	total      int64
-	read       atomic.Int64
-	onProgress func(int64)
-}
-
-func (pr *progressReader) Read(p []byte) (int, error) {
-	n, err := pr.reader.Read(p)
-	if n > 0 {
-		current := pr.read.Add(int64(n))
-		if pr.onProgress != nil {
-			pr.onProgress(current)
-		}
-	}
-	return n, err
-}
-
 type countingReader struct {
 	reader  io.Reader
 	counter *atomic.Int64

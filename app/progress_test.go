@@ -8,38 +8,6 @@ import (
 	"testing"
 )
 
-func TestProgressReader(t *testing.T) {
-	data := strings.Repeat("x", 1000)
-	r := strings.NewReader(data)
-
-	var currentRead int64
-	pr := &progressReader{
-		reader:     r,
-		total:      1000,
-		onProgress: func(n int64) { currentRead = n },
-	}
-
-	buf := make([]byte, 100)
-	totalRead := 0
-	for {
-		n, err := pr.Read(buf)
-		totalRead += n
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if totalRead != 1000 {
-		t.Errorf("total read = %d, want 1000", totalRead)
-	}
-	if currentRead != 1000 {
-		t.Errorf("progress reported = %d, want 1000", currentRead)
-	}
-}
-
 func TestFormatProgressBar(t *testing.T) {
 	bar := formatProgressBar(50, 100)
 	if !strings.Contains(bar, "50%") {

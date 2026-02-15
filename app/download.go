@@ -112,18 +112,22 @@ func (c *CLIApplication) download(ctx context.Context, r *resource, done chan do
 	outputPath := filepath.Join(c.outputDir, r.filename)
 	partPath := outputPath + ".part"
 
+	var downloaded atomic.Int64
+	pd.add(r.filename, &downloaded, r.length)
+
 	if r.chunks != nil {
-		if ok := c.downloadChunked(ctx, r, outputPath, partPath, pd); !ok {
+		if ok := c.downloadChunked(ctx, r, outputPath, partPath, &downloaded); !ok {
 			slog.Warn("chunked download failed, falling back to single stream", logKeyURL, r.url)
 			_ = os.Remove(partPath)
+			downloaded.Store(0)
 
-			if err := c.downloadSingle(ctx, r, outputPath, partPath, pd); err != nil {
+			if err := c.downloadSingle(ctx, r, outputPath, partPath, &downloaded); err != nil {
 				slog.Error("single download fallback failed", logKeyURL, r.url, logKeyError, err)
 				return
 			}
 		}
 	} else {
-		if err := c.downloadSingle(ctx, r, outputPath, partPath, pd); err != nil {
+		if err := c.downloadSingle(ctx, r, outputPath, partPath, &downloaded); err != nil {
 			slog.Error("single download failed", logKeyURL, r.url, logKeyError, err)
 			return
 		}
@@ -135,17 +139,14 @@ func (c *CLIApplication) download(ctx context.Context, r *resource, done chan do
 }
 
 func (c *CLIApplication) downloadChunked(
-	ctx context.Context, r *resource, outputPath, partPath string, pd *progressDisplay,
+	ctx context.Context, r *resource, outputPath, partPath string, downloaded *atomic.Int64,
 ) bool {
 	var wg sync.WaitGroup
-	var downloaded atomic.Int64
 	var errMu sync.Mutex
 	var fetchErr error
 
 	chunkCtx, chunkCancel := context.WithCancel(ctx)
 	defer chunkCancel()
-
-	pd.add(r.filename, &downloaded, r.length)
 
 	f, err := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY, permFile)
 	if err != nil {
@@ -163,12 +164,28 @@ func (c *CLIApplication) downloadChunked(
 		}
 	}
 
+	_ = f.Close()
+
 	for i, chunkPair := range r.chunks {
 		wg.Go(func() {
-			if err := c.fetchToFile(chunkCtx, r.url, chunkPair, f, &downloaded); err != nil {
-				slog.Error("chunk download failed", logKeyURL, r.url, "part", i, logKeyError, err)
+			chunkFile, err := os.OpenFile(partPath, os.O_WRONLY, permFile)
+			if err != nil {
+				slog.Error("failed to open part file for chunk", logKeyURL, r.url, "part", i, logKeyError, err)
 				errMu.Lock()
 				fetchErr = err
+				errMu.Unlock()
+				chunkCancel()
+
+				return
+			}
+
+			chunkErr := c.fetchToFile(chunkCtx, r.url, chunkPair, chunkFile, downloaded)
+			_ = chunkFile.Close()
+
+			if chunkErr != nil {
+				slog.Error("chunk download failed", logKeyURL, r.url, "part", i, logKeyError, chunkErr)
+				errMu.Lock()
+				fetchErr = chunkErr
 				errMu.Unlock()
 				chunkCancel()
 
@@ -179,7 +196,6 @@ func (c *CLIApplication) downloadChunked(
 		})
 	}
 	wg.Wait()
-	_ = f.Close()
 
 	if fetchErr != nil {
 		return false
@@ -194,7 +210,7 @@ func (c *CLIApplication) downloadChunked(
 }
 
 func (c *CLIApplication) downloadSingle(
-	ctx context.Context, r *resource, outputPath, partPath string, pd *progressDisplay,
+	ctx context.Context, r *resource, outputPath, partPath string, downloaded *atomic.Int64,
 ) error {
 	offset := getResumeOffset(partPath)
 
@@ -238,9 +254,7 @@ func (c *CLIApplication) downloadSingle(
 	}
 	defer func() { _ = f.Close() }()
 
-	var downloaded atomic.Int64
 	downloaded.Store(offset)
-	pd.add(r.filename, &downloaded, r.length)
 
 	var reader io.Reader = resp.Body
 
@@ -248,7 +262,7 @@ func (c *CLIApplication) downloadSingle(
 		reader = &rateLimitedReader{reader: reader, limiter: c.limiter}
 	}
 
-	reader = &countingReader{reader: reader, counter: &downloaded}
+	reader = &countingReader{reader: reader, counter: downloaded}
 
 	if _, err := io.Copy(f, reader); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
@@ -275,8 +289,8 @@ func (c *CLIApplication) fetchToFile(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("chunk fetch failed: %w: returned %d", errHTTPStatusIsNotOK, resp.StatusCode)
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("chunk fetch failed: expected 206, got %d", resp.StatusCode)
 	}
 
 	slog.Debug("fetch response", logKeyURL, url, "status", resp.StatusCode, "range", fmt.Sprintf("%d-%d", start, end))
