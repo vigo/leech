@@ -1,0 +1,32 @@
+name: Run go tests
+
+on:
+  pull_request:
+    paths:
+      - '**.go'
+  push:
+    branches:
+      - main
+    tags-ignore:
+      - '**'
+    paths:
+      - '**.go'
+
+concurrency:
+  group: leech-go-test
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+        id: go
+
+      - name: Run tests
+        run: go test -v -race -failfast ./...
