@@ -113,57 +113,14 @@ func (c *CLIApplication) download(ctx context.Context, r *resource, done chan do
 	partPath := outputPath + ".part"
 
 	if r.chunks != nil {
-		var wg sync.WaitGroup
-		var downloaded atomic.Int64
-		var errMu sync.Mutex
-		var fetchErr error
-
-		chunkCtx, chunkCancel := context.WithCancel(ctx)
-		defer chunkCancel()
-
-		pd.add(r.filename, &downloaded, r.length)
-
-		f, err := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, permFile)
-		if err != nil {
-			slog.Error("failed to create part file", "path", partPath, logKeyError, err)
-			return
-		}
-
-		// pre-allocate file size so concurrent WriteAt calls work
-		if err := f.Truncate(r.length); err != nil {
-			_ = f.Close()
-			slog.Error("failed to allocate part file", "path", partPath, logKeyError, err)
-			return
-		}
-
-		for i, chunkPair := range r.chunks {
-			wg.Go(func() {
-				if err := c.fetchToFile(chunkCtx, r.url, chunkPair, f, &downloaded); err != nil {
-					slog.Error("chunk download failed", logKeyURL, r.url, "part", i, logKeyError, err)
-					errMu.Lock()
-					fetchErr = err
-					errMu.Unlock()
-					chunkCancel()
-
-					return
-				}
-
-				slog.Debug("chunk downloaded", logKeyURL, r.url, "part", i)
-			})
-		}
-		wg.Wait()
-		_ = f.Close()
-
-		if fetchErr != nil {
-			slog.Error("download aborted due to chunk failure", logKeyURL, r.url, logKeyError, fetchErr)
+		if ok := c.downloadChunked(ctx, r, outputPath, partPath, pd); !ok {
+			slog.Warn("chunked download failed, falling back to single stream", logKeyURL, r.url)
 			_ = os.Remove(partPath)
 
-			return
-		}
-
-		if err := finalizePart(partPath, outputPath); err != nil {
-			slog.Error("failed to finalize download", "path", partPath, logKeyError, err)
-			return
+			if err := c.downloadSingle(ctx, r, outputPath, partPath, pd); err != nil {
+				slog.Error("single download fallback failed", logKeyURL, r.url, logKeyError, err)
+				return
+			}
 		}
 	} else {
 		if err := c.downloadSingle(ctx, r, outputPath, partPath, pd); err != nil {
@@ -175,6 +132,65 @@ func (c *CLIApplication) download(ctx context.Context, r *resource, done chan do
 	success = true
 
 	slog.Info("download complete", "file", r.filename, "size", formatBytes(r.length))
+}
+
+func (c *CLIApplication) downloadChunked(
+	ctx context.Context, r *resource, outputPath, partPath string, pd *progressDisplay,
+) bool {
+	var wg sync.WaitGroup
+	var downloaded atomic.Int64
+	var errMu sync.Mutex
+	var fetchErr error
+
+	chunkCtx, chunkCancel := context.WithCancel(ctx)
+	defer chunkCancel()
+
+	pd.add(r.filename, &downloaded, r.length)
+
+	f, err := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY, permFile)
+	if err != nil {
+		slog.Error("failed to create part file", "path", partPath, logKeyError, err)
+		return false
+	}
+
+	// only truncate if file size doesn't match expected length
+	info, statErr := f.Stat()
+	if statErr != nil || info.Size() != r.length {
+		if err := f.Truncate(r.length); err != nil {
+			_ = f.Close()
+			slog.Error("failed to allocate part file", "path", partPath, logKeyError, err)
+			return false
+		}
+	}
+
+	for i, chunkPair := range r.chunks {
+		wg.Go(func() {
+			if err := c.fetchToFile(chunkCtx, r.url, chunkPair, f, &downloaded); err != nil {
+				slog.Error("chunk download failed", logKeyURL, r.url, "part", i, logKeyError, err)
+				errMu.Lock()
+				fetchErr = err
+				errMu.Unlock()
+				chunkCancel()
+
+				return
+			}
+
+			slog.Debug("chunk downloaded", logKeyURL, r.url, "part", i)
+		})
+	}
+	wg.Wait()
+	_ = f.Close()
+
+	if fetchErr != nil {
+		return false
+	}
+
+	if err := finalizePart(partPath, outputPath); err != nil {
+		slog.Error("failed to finalize download", "path", partPath, logKeyError, err)
+		return false
+	}
+
+	return true
 }
 
 func (c *CLIApplication) downloadSingle(

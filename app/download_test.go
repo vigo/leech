@@ -302,6 +302,65 @@ func TestDownloadSingleNoChunks(t *testing.T) {
 	}
 }
 
+func TestDownloadChunkedFallbackToSingle(t *testing.T) {
+	content := []byte("fallback content here!!")
+
+	// server advertises Accept-Ranges on HEAD but rejects range GETs
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			if r.Header.Get("Range") != "" {
+				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+				return
+			}
+			w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+			w.Write(content)
+		}
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+
+	app := &CLIApplication{
+		Client:    ts.Client(),
+		chunkSize: 3,
+		limiter:   newRateLimiter(0),
+		outputDir: dir,
+	}
+
+	r, err := app.getResourceInformation(context.Background(), ts.URL+"/fallback.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if r.chunks == nil {
+		t.Fatal("expected chunks to be set (server advertises Accept-Ranges)")
+	}
+
+	pd := newProgressDisplay()
+	done := make(chan downloadResult, 1)
+	go app.download(context.Background(), r, done, pd)
+	result := <-done
+
+	if !result.ok {
+		t.Error("expected download to succeed via single-stream fallback")
+	}
+
+	outputPath := filepath.Join(dir, r.filename)
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("downloaded content = %q, want %q", string(got), string(content))
+	}
+}
+
 func TestGetResourceInformationContentDisposition(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "5")
