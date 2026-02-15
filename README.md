@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/badge/version-0.0.0-orange.svg)
+![Version](https://img.shields.io/badge/version-0.1.0-orange.svg)
 ![Go](https://img.shields.io/badge/go-1.26-blue.svg)
 [![Run golangci-lint](https://github.com/vigo/leech/actions/workflows/golint.yml/badge.svg)](https://github.com/vigo/leech/actions/workflows/golint.yml)
 [![Run go tests](https://github.com/vigo/leech/actions/workflows/gotests.yml/badge.svg)](https://github.com/vigo/leech/actions/workflows/gotests.yml)

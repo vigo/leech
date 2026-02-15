@@ -1,4 +1,4 @@
 package app
 
 // Version holds application version information.
-const Version string = "0.0.0"
+const Version string = "0.1.0"
