@@ -2,6 +2,7 @@
 ![Go](https://img.shields.io/badge/go-1.26-blue.svg)
 [![Run golangci-lint](https://github.com/vigo/leech/actions/workflows/golint.yml/badge.svg)](https://github.com/vigo/leech/actions/workflows/golint.yml)
 [![Run go tests](https://github.com/vigo/leech/actions/workflows/gotests.yml/badge.svg)](https://github.com/vigo/leech/actions/workflows/gotests.yml)
+[![codecov](https://codecov.io/gh/vigo/leech/graph/badge.svg?token=TDMD5E9N1Y)](https://codecov.io/gh/vigo/leech)
 
 # Leech
 
