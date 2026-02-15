@@ -36,6 +36,16 @@ brew tap vigo/leech
 brew install leech
 ```
 
+> **Cask Conflict:** Homebrew's official cask registry has an app called
+> [Leech](https://manytricks.com/leech/) (a GUI download manager by Many Tricks).
+> If that cask is installed, `brew install leech` will install the formula but
+> **skip linking the binary**. To fix this:
+>
+> ```bash
+> brew install vigo/leech/leech
+> brew link --overwrite leech
+> ```
+
 ### Go
 
 ```bash
